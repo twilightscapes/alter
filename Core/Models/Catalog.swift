@@ -697,7 +697,7 @@ final class Catalog {
 
     @discardableResult
     func createStack(photoIDs: [Int64], pick: Int64? = nil) throws -> Int64 {
-        guard let first = photoIDs.first else { throw NSError(domain: "ALTer", code: 1) }
+        guard let first = photoIDs.first else { throw NSError(domain: "Alter", code: 1) }
         try db.run("INSERT INTO stacks (pick_photo_id, collapsed) VALUES (?, 1)", [pick ?? first])
         let stackID = db.lastInsertRowID
         for id in photoIDs {
