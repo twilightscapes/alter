@@ -1181,6 +1181,7 @@ final class LibraryStore: ObservableObject {
     /// H: the floating Inspector HUD while in full screen.
     @Published var isInspectorHUDVisible = false
     private var fullScreenObserver: Any?
+    private var fullScreenEnterObserver: Any?
 
     func toggleFullScreenMode(window: NSWindow?) {
         if isFullScreenMode { exitFullScreenMode(window: window) } else { enterFullScreenMode(window: window) }
@@ -1197,16 +1198,32 @@ final class LibraryStore: ObservableObject {
         if let window, !window.styleMask.contains(.fullScreen) {
             window.toggleFullScreen(nil)
         }
-        // Leaving native full screen by the green button / ⌃⌘F leaves our
-        // mode too.
-        if fullScreenObserver == nil {
-            fullScreenObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didExitFullScreenNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in
-                    self?.isFullScreenMode = false
-                    self?.isInspectorHUDVisible = false
-                    self?.slideshowIDs = nil
+        installFullScreenObservers()
+    }
+
+    /// Native full screen and ours move together, whichever way in: the
+    /// green button or ⌃⌘F into full screen gives Aperture's black,
+    /// chrome-free Full Screen (it used to give the windowed layout, just
+    /// bigger), and leaving native full screen leaves ours. Called once the
+    /// main window is up, and again (harmlessly) on entering.
+    func installFullScreenObservers() {
+        installFullScreenObserver()
+        guard fullScreenEnterObserver == nil else { return }
+        fullScreenEnterObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEnterFullScreenNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            // Not the Settings window, should anyone full-screen it.
+            let id = (note.object as? NSWindow)?.identifier?.rawValue ?? ""
+            guard !id.localizedCaseInsensitiveContains("settings") else { return }
+            Task { @MainActor in
+                // The toolbar and menu bar hide together and slide in from
+                // the top edge (Alter's Full Screen controls live in it).
+                NSApp.presentationOptions = [.fullScreen, .autoHideMenuBar, .autoHideToolbar]
+                guard let self, self.isOpen, !self.isFullScreenMode, self.slideshowIDs == nil else { return }
+                self.isFullScreenMode = true
+                if self.viewMode == .browser, let id = self.selection.first, self.selection.count == 1 {
+                    self.viewerPhotoID = id
+                    self.viewMode = .viewer
                 }
             }
         }

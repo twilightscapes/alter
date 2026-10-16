@@ -29,7 +29,10 @@ struct ContentView: View {
                 // the toolbar gone when the window came back.
                 ZStack {
                     librarySplit
-                        .toolbar(store.isFullScreenMode || store.slideshowIDs != nil ? .hidden : .visible,
+                        // In Full Screen the toolbar stays — macOS slides it
+                        // down with the menu bar (auto-hide, set on entering)
+                        // and it carries the Full Screen controls.
+                        .toolbar(store.slideshowIDs != nil ? .hidden : .visible,
                                  for: .windowToolbar)
                     if let ids = store.slideshowIDs {
                         SlideshowView(ids: ids)
@@ -46,6 +49,7 @@ struct ContentView: View {
         .navigationTitle(store.isOpen ? "Media" : "Alter")
         .onAppear {
             store.openLastLibraryIfAvailable()
+            store.installFullScreenObservers()
             if keyCommands == nil {
                 let commands = KeyCommands(store: store)
                 commands.install()
@@ -198,6 +202,9 @@ struct ContentView: View {
             }
         }
         .toolbar {
+            if store.isFullScreenMode {
+                FullScreenToolbarItems()
+            } else {
             ToolbarItemGroup {
                 Picker("View", selection: $store.viewMode) {
                     Image(systemName: "square.grid.2x2").tag(LibraryStore.ViewMode.browser)
@@ -235,6 +242,7 @@ struct ContentView: View {
                       : "Export the \(store.selection.count) selected (⌘E)")
 
                 if let items = AlterExtensions.shared.toolbarItems { items(store) }
+            }
             }
         }
         // Sheets are attached one per view node (see `sheetHosts`) — chaining
@@ -406,12 +414,13 @@ private struct FullScreenView: View {
 
     @State private var pointerY: CGFloat?
     @State private var stripHovered = false
-    @State private var topHovered = false
     /// Aperture's "Always Show Filmstrip".
     @AppStorage("fullscreen.pinFilmstrip") private var pinFilmstrip = false
     /// HUD centre; nil = default spot top-right.
     @State private var hudPosition: CGPoint?
     @State private var hudDragStart: CGPoint?
+    /// The full-screen area, for keeping the HUD reachable while dragging.
+    @State private var screenSize: CGSize = .zero
     private let hudSize = CGSize(width: 380, height: 660)
 
     private let stripHeight: CGFloat = 150
@@ -450,13 +459,6 @@ private struct FullScreenView: View {
                 }
                 .animation(.easeOut(duration: 0.18), value: showStrip(in: geo.size))
 
-                // Top bar, from the top.
-                if showTop {
-                    topBar
-                        .onHover { topHovered = $0 }
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
                 if store.isLiftStampVisible || store.isKeywordsHUDVisible {
                     HStack(alignment: .bottom, spacing: 12) {
                         if store.isLiftStampVisible { LiftStampHUD() }
@@ -470,16 +472,16 @@ private struct FullScreenView: View {
                 // Inspector HUD.
                 if store.isInspectorHUDVisible {
                     let home = CGPoint(x: geo.size.width - hudSize.width / 2 - 24,
-                                       y: hudSize.height / 2 + 60)
-                    let p = hudPosition ?? home
+                                       y: hudSize.height / 2 + menuBarClearance + 16)
+                    let p = clampedHUD(hudPosition ?? home, in: geo.size)
                     inspectorHUD
-                        .position(x: min(max(p.x, hudSize.width / 2), geo.size.width - hudSize.width / 2),
-                                  y: min(max(p.y, hudSize.height / 2), geo.size.height - hudSize.height / 2))
+                        .position(x: p.x, y: p.y)
                         .transition(.opacity)
                 }
             }
             .coordinateSpace(name: "fullscreen")
-            .animation(.easeOut(duration: 0.18), value: showTop)
+            .onAppear { screenSize = geo.size }
+            .onChange(of: geo.size) { screenSize = $0 }
             .animation(.easeOut(duration: 0.15), value: store.isInspectorHUDVisible)
             .onContinuousHover(coordinateSpace: .local) { phase in
                 switch phase {
@@ -500,53 +502,28 @@ private struct FullScreenView: View {
         return y > size.height - 6
     }
 
-    private var showTop: Bool {
-        if topHovered { return true }
-        guard let y = pointerY else { return false }
-        return y < 50
+    /// The band at the top that macOS claims in full screen: its menu bar
+    /// and, under it, the window's title strip and toolbar, which slide down
+    /// together and take every click there. The Inspector HUD's title row is
+    /// kept below it.
+    private var menuBarClearance: CGFloat {
+        let menuBar = max(NSApp.mainMenu?.menuBarHeight ?? 0, NSScreen.main?.safeAreaInsets.top ?? 0, 24)
+        // Measured: a 52-point window (title strip plus toolbar) sits under
+        // the menu bar while it shows.
+        let titleStrip: CGFloat = 52
+        return menuBar + titleStrip + 6
     }
 
-    private var topBar: some View {
-        HStack(spacing: 14) {
-            Button {
-                store.exitFullScreenMode(window: NSApp.keyWindow ?? NSApp.mainWindow)
-            } label: {
-                Label("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left")
-            }
-            .help("Back to the window (F or Esc)")
-            Picker("View", selection: $store.viewMode) {
-                Image(systemName: "square.grid.2x2").tag(LibraryStore.ViewMode.browser)
-                Image(systemName: "rectangle").tag(LibraryStore.ViewMode.viewer)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 90)
-            .help("Browser or Viewer (V)")
-            Spacer()
-            if let id = store.viewerPhotoID, let item = store.item(id) {
-                Text(item.filename)
-                    .foregroundColor(.white.opacity(0.8))
-                    .lineLimit(1)
-                Spacer()
-            }
-            Toggle(isOn: $pinFilmstrip) {
-                Label("Filmstrip", systemImage: "rectangle.bottomthird.inset.filled")
-            }
-            .toggleStyle(.button)
-            .help("Always show the filmstrip (otherwise it slides up from the bottom edge)")
-            Toggle(isOn: $store.isInspectorHUDVisible) {
-                Label("Inspector", systemImage: "slider.horizontal.3")
-            }
-            .toggleStyle(.button)
-            .help("Inspector HUD (H)")
-        }
-        .controlSize(.small)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.85))
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
-        }
+    /// The HUD's centre, kept on screen and with its title row (close
+    /// button, drag handle) below the top bar. Dragged into the band macOS
+    /// claims under the menu bar, the title row stopped taking clicks and the
+    /// HUD could be neither moved nor closed.
+    private func clampedHUD(_ p: CGPoint, in size: CGSize) -> CGPoint {
+        guard size.width > 0, size.height > 0 else { return p }
+        let topLimit = menuBarClearance + hudSize.height / 2
+        let bottomLimit = max(topLimit, size.height - hudSize.height / 2)
+        return CGPoint(x: min(max(p.x, hudSize.width / 2), max(hudSize.width / 2, size.width - hudSize.width / 2)),
+                       y: min(max(p.y, topLimit), bottomLimit))
     }
 
     private var inspectorHUD: some View {
@@ -582,8 +559,11 @@ private struct FullScreenView: View {
                                 x: drag.startLocation.x, y: drag.startLocation.y + hudSize.height / 2 - 14)
                         }
                         guard let start = hudDragStart else { return }
-                        hudPosition = CGPoint(x: start.x + drag.translation.width,
-                                              y: start.y + drag.translation.height)
+                        // Clamped as it moves, so overshooting an edge and
+                        // coming back doesn't leave a dead stretch.
+                        hudPosition = clampedHUD(CGPoint(x: start.x + drag.translation.width,
+                                                         y: start.y + drag.translation.height),
+                                                 in: screenSize)
                     }
                     .onEnded { _ in hudDragStart = nil }
             )
@@ -598,3 +578,43 @@ private struct FullScreenView: View {
         .shadow(color: .black.opacity(0.6), radius: 20, y: 8)
     }
 }
+
+/// Alter's Full Screen controls, in the window toolbar. macOS slides the
+/// toolbar down with the menu bar when the pointer reaches the top edge and
+/// hides both when it leaves — flush with the top of the screen and fully
+/// clickable. (A bar of Alter's own up there fought the menu bar: it floated
+/// below it, flickered, or sat under macOS's click-catching title strip.)
+private struct FullScreenToolbarItems: ToolbarContent {
+    @EnvironmentObject var store: LibraryStore
+    @AppStorage("fullscreen.pinFilmstrip") private var pinFilmstrip = false
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigation) {
+            Button {
+                store.exitFullScreenMode(window: NSApp.keyWindow ?? NSApp.mainWindow)
+            } label: {
+                Label("Exit Full Screen", systemImage: "arrow.down.right.and.arrow.up.left")
+            }
+            .help("Back to the window (F or Esc)")
+        }
+        ToolbarItemGroup {
+            Picker("View", selection: $store.viewMode) {
+                Image(systemName: "square.grid.2x2").tag(LibraryStore.ViewMode.browser)
+                    .help("Browser")
+                Image(systemName: "rectangle").tag(LibraryStore.ViewMode.viewer)
+                    .help("Viewer")
+            }
+            .pickerStyle(.segmented)
+            .help("Browser or Viewer (V)")
+            Toggle(isOn: $pinFilmstrip) {
+                Label("Filmstrip", systemImage: "rectangle.bottomthird.inset.filled")
+            }
+            .help("Always show the filmstrip (otherwise it slides up from the bottom edge)")
+            Toggle(isOn: $store.isInspectorHUDVisible) {
+                Label("Inspector", systemImage: "slider.horizontal.3")
+            }
+            .help("Inspector HUD (H)")
+        }
+    }
+}
+
