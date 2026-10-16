@@ -308,40 +308,19 @@ enum EditRenderer {
         return mask
     }
 
-    /// Cover each spot with a soft-edged patch cloned from its source offset.
+    /// Repair heals, Clone copies — see Retouch.swift.
     private static func applyRetouches(_ spots: [RetouchSpot], to input: CIImage) -> CIImage {
-        guard !spots.isEmpty else { return input }
-        var image = input
-        let width = input.extent.width
-        let height = input.extent.height
+        RetouchRenderer.apply(spots, to: input)
+    }
 
-        for spot in spots {
-            // CI origin is bottom-left; normalized coords are top-left based.
-            let center = CIVector(x: input.extent.minX + spot.x * width,
-                                  y: input.extent.minY + (1 - spot.y) * height)
-            let radius = max(2, spot.radius * width)
-
-            // The patch: the whole image shifted so the source region lands
-            // on the target, then masked to a soft-edged circle.
-            let patch = image.transformed(by: CGAffineTransform(
-                translationX: -spot.dx * width, y: spot.dy * height))
-
-            let softness = min(max(spot.softness ?? 0.45, 0), 1)
-            let opacity = min(max(spot.opacity ?? 1, 0), 1)
-            guard let gradient = CIFilter(name: "CIRadialGradient", parameters: [
-                "inputCenter": center,
-                "inputRadius0": max(0.5, radius * (1 - softness)),
-                "inputRadius1": radius,
-                "inputColor0": CIColor(red: 1, green: 1, blue: 1, alpha: opacity),
-                "inputColor1": CIColor.clear,
-            ])?.outputImage?.cropped(to: image.extent) else { continue }
-
-            image = patch.applyingFilter("CIBlendWithMask", parameters: [
-                kCIInputBackgroundImageKey: image,
-                kCIInputMaskImageKey: gradient,
-            ]).cropped(to: input.extent)
-        }
-        return image
+    /// The image retouch spots are placed on and heal from: geometry plus
+    /// the first `count` spots, nothing tonal. The viewer searches it for
+    /// Repair sources.
+    static func retouchStage(_ recipe: PhotoEdits, spots count: Int, to cgImage: CGImage) -> CGImage? {
+        let edits = recipe.effective
+        var image = applyGeometry(edits, to: CIImage(cgImage: cgImage))
+        image = applyRetouches(Array(edits.retouchSpots.prefix(count)), to: image)
+        return withRenderStack { context.createCGImage(image, from: image.extent) }
     }
 
     // MARK: - Red Eye

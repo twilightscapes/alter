@@ -7,11 +7,17 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.0.2"
-    CURRENT_PROJECT_VERSION: "21"
+    MARKETING_VERSION: "1.0.3"
+    CURRENT_PROJECT_VERSION: "22"
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
+  configs:
+    # Optimized even in Debug: the pixel work (Retouch's heal and fill, the
+    # renderer) runs ~75× slower unoptimized, so a Debug build wouldn't feel
+    # like the app that ships.
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
 targets:
   AlterFree:
     type: application
