@@ -358,7 +358,7 @@ final class LibraryStore: ObservableObject {
                 }
             }
         }
-        thread.name = "ALTer.ApertureImport"
+        thread.name = "Alter.ApertureImport"
         thread.qualityOfService = .userInitiated
         thread.stackSize = 16 << 20
         thread.start()
@@ -2379,7 +2379,7 @@ final class LibraryStore: ObservableObject {
         let stagingDir: URL
         if options.archive != nil {
             stagingDir = fm.temporaryDirectory
-                .appendingPathComponent("ALTerExport-\(UUID().uuidString)")
+                .appendingPathComponent("AlterExport-\(UUID().uuidString)")
         } else {
             stagingDir = options.destination
         }

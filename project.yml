@@ -25,8 +25,37 @@ targets:
         buildPhase: resources
       - path: Tools/cwebp
         buildPhase: resources
+    # XcodeGen writes this file from the properties below on every
+    # generate — edit them here, not in the plist.
     info:
       path: Resources/Info.plist
+      properties:
+        CFBundleDocumentTypes:
+          # The .alterlib library is a Finder package: one document icon,
+          # double-click opens Alter. Aperture libraries open read-only,
+          # with an Alter catalog built beside them.
+          - CFBundleTypeName: Alter Library
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSTypeIsPackage: true
+            LSItemContentTypes: [app.altermedia.alterlib]
+          - CFBundleTypeName: Aperture Library
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSTypeIsPackage: true
+            LSItemContentTypes: [com.apple.aperture.library]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.apple.aperture.library
+            UTTypeDescription: Aperture Library
+            UTTypeConformsTo: [com.apple.package]
+            UTTypeTagSpecification:
+              public.filename-extension: [aplibrary]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: app.altermedia.alterlib
+            UTTypeDescription: Alter Library
+            UTTypeConformsTo: [com.apple.package]
+            UTTypeTagSpecification:
+              public.filename-extension: [alterlib]
     settings:
       base:
         PRODUCT_NAME: Alter Free

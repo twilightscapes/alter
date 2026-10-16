@@ -44,7 +44,7 @@ enum GIFTranscoder {
     /// Support, NOT Caches: purgeable storage would eat the edits too.
     static func derivedURL(for gifURL: URL) -> URL {
         let store = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ALTer/GIFMovies", isDirectory: true)
+            .appendingPathComponent("Alter/GIFMovies", isDirectory: true)
         try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
         let key = gifURL.path.data(using: .utf8)!
             .base64EncodedString()
@@ -113,7 +113,7 @@ enum GIFTranscoder {
         writer.startSession(atSourceTime: .zero)
 
         let timescale: CMTimeScale = 600
-        let queue = DispatchQueue(label: "org.alttext.gif-transcode")
+        let queue = DispatchQueue(label: "app.altermedia.gif-transcode")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             var index = 0
