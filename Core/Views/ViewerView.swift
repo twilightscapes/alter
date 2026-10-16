@@ -1999,7 +1999,7 @@ struct ViewerView: View {
                     .accessibilityLabel("Straighten")
                     .accessibilityValue(String(format: "%.1f degrees", item?.edits.straightenDegrees ?? 0))
                 ScrubValue(value: item?.edits.straightenDegrees ?? 0, range: -15...15, perPoint: 0.05,
-                           format: { String(format: "%+.1f°", $0) }, defaultValue: 0,
+                           format: { signedReadout($0, decimals: 1, suffix: "°") }, defaultValue: 0,
                            onChange: { straightenBinding.wrappedValue = $0 })
             }
 
@@ -2066,7 +2066,7 @@ struct ViewerView: View {
                 .accessibilityLabel("Straighten")
                 .accessibilityValue(String(format: "%.1f degrees", item?.edits.straightenDegrees ?? 0))
             ScrubValue(value: item?.edits.straightenDegrees ?? 0, range: -15...15, perPoint: 0.05,
-                       format: { String(format: "%+.1f°", $0) }, defaultValue: 0,
+                       format: { signedReadout($0, decimals: 1, suffix: "°") }, defaultValue: 0,
                        onChange: { straightenBinding.wrappedValue = $0 })
             Button("Reset") { straightenBinding.wrappedValue = 0 }
                 .disabled((item?.edits.straightenDegrees ?? 0) == 0)

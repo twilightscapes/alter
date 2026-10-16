@@ -409,7 +409,7 @@ private struct BrickSection: View {
             ApertureSlider("Temp", value: $holder.temperature, in: -100...100,
                            format: { "\(Int((5200 + $0 * 25).rounded())) K" })
             ApertureSlider("Tint", value: $holder.tint, in: -100...100,
-                           format: { String(format: "%+.0f", $0) })
+                           format: { signedReadout($0, decimals: 0) })
 
         case .exposure:
             ApertureSlider("Exposure", value: $holder.exposure, in: -2...2)
@@ -586,13 +586,21 @@ private struct BrickSection: View {
 
 // MARK: - The slider row
 
+/// A signed slider readout: "+0.25", "-12°". Anything that rounds to zero
+/// reads "0" with no sign — never "-0" or "+0".
+func signedReadout(_ value: Double, decimals: Int, suffix: String = "") -> String {
+    let text = String(format: "%.\(decimals)f", value)
+    if Double(text) == 0 { return String(format: "%.\(decimals)f", 0.0) + suffix }
+    return (value > 0 ? "+" : "") + text + suffix
+}
+
 /// Label · slider · scrubbable number · reset arrow — Aperture's row.
 struct ApertureSlider: View {
     let label: String
     @Binding var value: Double
     let range: ClosedRange<Double>
     var defaultValue: Double = 0
-    var format: (Double) -> String = { String(format: "%+.2f", $0) }
+    var format: (Double) -> String = { signedReadout($0, decimals: 2) }
 
     init(_ label: String, value: Binding<Double>, in range: ClosedRange<Double>,
          default defaultValue: Double = 0, format: ((Double) -> String)? = nil) {
@@ -600,7 +608,7 @@ struct ApertureSlider: View {
         self._value = value
         self.range = range
         self.defaultValue = defaultValue
-        self.format = format ?? { String(format: "%+.2f", $0) }
+        self.format = format ?? { signedReadout($0, decimals: 2) }
     }
 
     private var isDefault: Bool { abs(value - defaultValue) < 0.0005 }

@@ -2020,28 +2020,73 @@ final class LibraryStore: ObservableObject {
     // MARK: - On-device intelligence (Auto enhance, suggested tags)
 
     /// Histogram-derived starting-point adjustments (Core Graphics, on-device).
-    func autoEnhance(ids: [Int64]) async {
-        guard let catalog else { return }
-        isWorking = true
-        defer { isWorking = false }
+    /// Sets only exposure, contrast and vibrance; the rest of each recipe
+    /// (crop, retouch, brushes, other bricks) stays. One ⌘Z undoes the batch.
+    func autoEnhance(ids: [Int64], undoManager: UndoManager? = nil) async {
+        let done = await runAuto(.autoEnhance, ids: ids, actionName: "Auto-Enhance",
+                                 undoManager: undoManager) { done in
+            "Auto-enhancing \(done + 1) of \(ids.count)…"
+        }
+        statusMessage = "Auto-enhanced \(done) photo\(done == 1 ? "" : "s")."
+    }
+
+    /// Analyse each photo and write just `fields`, applying as each one
+    /// finishes; registers one undo for the whole run. Returns the count.
+    /// `undoManager` is the calling view's; a menu command has none and
+    /// takes the front window's, captured before any await.
+    private func runAuto(_ fields: AutoEnhance.Fields, ids: [Int64], actionName: String,
+                         undoManager: UndoManager?, status: ((Int) -> String)? = nil) async -> Int {
+        guard let catalog else { return 0 }
+        let undoManager = undoManager ?? (NSApp.keyWindow ?? NSApp.mainWindow)?.undoManager
+        if status != nil { isWorking = true }
+        defer { if status != nil { isWorking = false } }
+        var previous: [Int64: AutoEnhance.Values] = [:]
         var done = 0
         for id in ids {
             guard let current = item(id) else { continue }
-            statusMessage = "Auto-enhancing \(done + 1) of \(ids.count)…"
+            if let status { statusMessage = status(done) }
             let url = current.url
             try? await FileLocality.ensureLocal(url)
             let computed = await Task.detached(priority: .userInitiated) {
-                AutoEnhance.edits(for: url)
+                AutoEnhance.values(for: url)
             }.value
             if let computed {
                 updateItem(id) { item in
-                    item.edits = computed
-                    try? catalog.updateEdits(photoID: id, computed)
+                    previous[id] = item.edits.autoValues
+                    item.edits.apply(computed, fields: fields)
+                    try? catalog.updateEdits(photoID: id, item.edits)
                 }
             }
             done += 1
         }
-        statusMessage = "Auto-enhanced \(done) photo\(done == 1 ? "" : "s")."
+        registerAutoUndo(previous, fields: fields, actionName: actionName, undoManager: undoManager)
+        return done
+    }
+
+    /// Put these Auto sliders back and register the swap the other way, so
+    /// ⌘Z undoes an Auto and ⌘⇧Z redoes it. Only the Auto fields swap —
+    /// a crop or brush made after the Auto survives the undo.
+    private func setAutoValues(_ values: [Int64: AutoEnhance.Values], fields: AutoEnhance.Fields,
+                               actionName: String, undoManager: UndoManager?) {
+        guard let catalog else { return }
+        var previous: [Int64: AutoEnhance.Values] = [:]
+        for (id, value) in values {
+            updateItem(id) { item in
+                previous[id] = item.edits.autoValues
+                item.edits.apply(value, fields: fields)
+                try? catalog.updateEdits(photoID: id, item.edits)
+            }
+        }
+        registerAutoUndo(previous, fields: fields, actionName: actionName, undoManager: undoManager)
+    }
+
+    private func registerAutoUndo(_ previous: [Int64: AutoEnhance.Values], fields: AutoEnhance.Fields,
+                                  actionName: String, undoManager: UndoManager?) {
+        guard !previous.isEmpty, let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { store in
+            store.setAutoValues(previous, fields: fields, actionName: actionName, undoManager: undoManager)
+        }
+        undoManager.setActionName(actionName)
     }
 
     /// Vision-classifier keyword suggestions, appended to each photo (on-device).
@@ -2149,18 +2194,14 @@ final class LibraryStore: ObservableObject {
         statusMessage = "Applied “\(preset.name)” to \(ids.count) photo\(ids.count == 1 ? "" : "s")."
     }
 
-    /// Auto for one brick: the analysis Auto-Enhance does, kept to that
-    /// brick's sliders.
-    func autoBrick(_ brick: AdjustmentBrick, photoID: Int64) async {
-        guard let catalog, let current = item(photoID) else { return }
-        let url = current.url
-        try? await FileLocality.ensureLocal(url)
-        let computed = await Task.detached(priority: .userInitiated) { AutoEnhance.edits(for: url) }.value
-        guard let computed else { return }
-        updateItem(photoID) { item in
-            item.edits.absorb(computed, brick: brick)
-            try? catalog.updateEdits(photoID: photoID, item.edits)
-        }
+    /// Auto for one brick: sets only the sliders that brick's analysis
+    /// computes (Exposure → exposure; Enhance → contrast and vibrance;
+    /// Highlights & Shadows → highlights and shadows). The brick's other
+    /// sliders and the rest of the recipe stay. Undoable.
+    func autoBrick(_ brick: AdjustmentBrick, photoID: Int64, undoManager: UndoManager? = nil) async {
+        guard let fields = AutoEnhance.Fields(brick: brick) else { return }
+        _ = await runAuto(fields, ids: [photoID], actionName: "Auto \(brick.name)",
+                          undoManager: undoManager)
     }
 
     // MARK: - Lift & Stamp (O)

@@ -8,7 +8,8 @@
 //
 //  On-device "Auto" adjustment: analyze the image's histogram and derive
 //  slider values for the existing PhotoEdits recipe. Deliberately NOT a black
-//  box — Auto just moves the same sliders the user can then refine.
+//  box — Auto just moves the same sliders the user can then refine, and only
+//  the ones it analysed.
 //
 
 import CoreGraphics
@@ -17,12 +18,49 @@ import ImageIO
 
 enum AutoEnhance {
 
-    /// Compute a starting-point recipe for a photo. Returns nil if the image
-    /// can't be read.
-    static func edits(for url: URL) -> PhotoEdits? {
+    /// The sliders Auto can move. Auto writes only these; every other
+    /// field of the recipe (crop, retouch, brushes, other bricks) is left
+    /// exactly as it was.
+    struct Fields: OptionSet {
+        let rawValue: Int
+        static let exposure = Fields(rawValue: 1 << 0)
+        static let contrast = Fields(rawValue: 1 << 1)
+        static let vibrance = Fields(rawValue: 1 << 2)
+        static let highlights = Fields(rawValue: 1 << 3)
+        static let shadows = Fields(rawValue: 1 << 4)
+
+        /// What Auto-Enhance sets: a baseline exposure, contrast and vibrance.
+        static let autoEnhance: Fields = [.exposure, .contrast, .vibrance]
+
+        /// What one brick's Auto button sets, or nil if the brick has no
+        /// analysis of its own here (Levels and Curves auto from the
+        /// panel's histogram instead).
+        init?(brick: AdjustmentBrick) {
+            switch brick {
+            case .exposure: self = .exposure
+            case .enhance: self = [.contrast, .vibrance]
+            case .highlightsShadows: self = [.highlights, .shadows]
+            default: return nil
+            }
+        }
+
+        init(rawValue: Int) { self.rawValue = rawValue }
+    }
+
+    /// The analysed slider values, neutral where the image needs nothing.
+    struct Values {
+        var exposure = 0.0
+        var contrast = 1.0
+        var vibrance = 0.0
+        var highlights = 0.0
+        var shadows = 0.0
+    }
+
+    /// Analyse a photo. Returns nil if the image can't be read.
+    static func values(for url: URL) -> Values? {
         guard let sample = samplePixels(url: url) else { return nil }
 
-        var edits = PhotoEdits()
+        var values = Values()
 
         // Exposure: push mean luminance toward mid-gray.
         let targetLuminance = 0.42
@@ -30,25 +68,38 @@ enum AutoEnhance {
             var exposure = log2(targetLuminance / sample.meanLuminance)
             exposure = min(1.25, max(-1.25, exposure))
             if abs(exposure) >= 0.1 {
-                edits.exposure = round(exposure * 100) / 100
+                values.exposure = round(exposure * 100) / 100
             }
         }
 
         // Contrast: widen a flat histogram (small p5–p95 spread).
         let spread = sample.p95 - sample.p5
         if spread > 0.05 && spread < 0.65 {
-            edits.contrast = min(1.3, 1 + (0.65 - spread) * 0.6)
-            edits.contrast = round(edits.contrast * 100) / 100
+            values.contrast = min(1.3, 1 + (0.65 - spread) * 0.6)
+            values.contrast = round(values.contrast * 100) / 100
         }
 
         // Vibrance: lift muted color — but leave true monochrome images alone
         // (a B&W photo isn't "undersaturated", it's intentional).
         if sample.meanSaturation > 0.03 && sample.meanSaturation < 0.22 {
-            edits.vibrance = min(0.35, (0.22 - sample.meanSaturation) * 2)
-            edits.vibrance = round(edits.vibrance * 100) / 100
+            values.vibrance = min(0.35, (0.22 - sample.meanSaturation) * 2)
+            values.vibrance = round(values.vibrance * 100) / 100
         }
 
-        return edits
+        // Highlights & Shadows: from the histogram's clipped ends. A real
+        // share of pixels piled up near white pulls highlights down; a
+        // real share crushed near black lifts shadows. A few specular
+        // glints or a black border don't count.
+        if sample.nearWhite > 0.02 {
+            let pull = min(0.6, (sample.nearWhite - 0.02) * 3 + 0.1)
+            values.highlights = round(pull * 100) / 100
+        }
+        if sample.nearBlack > 0.04 {
+            let lift = min(0.5, (sample.nearBlack - 0.04) * 2.5 + 0.1)
+            values.shadows = round(lift * 100) / 100
+        }
+
+        return values
     }
 
     // MARK: - Pixel sampling
@@ -58,6 +109,9 @@ enum AutoEnhance {
         let p5: Double
         let p95: Double
         let meanSaturation: Double
+        /// Share of pixels at or near clipping on each end.
+        let nearBlack: Double
+        let nearWhite: Double
     }
 
     private static func samplePixels(url: URL) -> Sample? {
@@ -104,6 +158,25 @@ enum AutoEnhance {
             meanLuminance: luminances.reduce(0, +) / Double(count),
             p5: sorted[max(0, Int(Double(count) * 0.05) - 1)],
             p95: sorted[min(count - 1, Int(Double(count) * 0.95))],
-            meanSaturation: saturationTotal / Double(count))
+            meanSaturation: saturationTotal / Double(count),
+            nearBlack: Double(sorted.prefix { $0 < 0.04 }.count) / Double(count),
+            nearWhite: Double(sorted.reversed().prefix { $0 > 0.96 }.count) / Double(count))
+    }
+}
+
+extension PhotoEdits {
+    /// The current values of the sliders Auto can move.
+    var autoValues: AutoEnhance.Values {
+        AutoEnhance.Values(exposure: exposure, contrast: contrast, vibrance: vibrance,
+                           highlights: highlightsValue, shadows: shadowsValue)
+    }
+
+    /// Set just these sliders; nothing else in the recipe changes.
+    mutating func apply(_ values: AutoEnhance.Values, fields: AutoEnhance.Fields) {
+        if fields.contains(.exposure) { exposure = values.exposure }
+        if fields.contains(.contrast) { contrast = values.contrast }
+        if fields.contains(.vibrance) { vibrance = values.vibrance }
+        if fields.contains(.highlights) { highlightsValue = values.highlights }
+        if fields.contains(.shadows) { shadowsValue = values.shadows }
     }
 }
