@@ -291,6 +291,7 @@ private struct InfoPanel: View {
 
 private struct AdjustmentsPanel: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.undoManager) private var undoManager
     let id: Int64
     let item: PhotoItem
 
@@ -326,13 +327,13 @@ private struct AdjustmentsPanel: View {
                 }
 
                 Button {
-                    Task { await store.autoEnhance(ids: [id]) }
+                    Task { await store.autoEnhance(ids: [id], undoManager: undoManager) }
                 } label: {
                     Label("Auto", systemImage: "wand.and.stars")
                         .frame(maxWidth: .infinity)
                 }
                 .disabled(store.isWorking)
-                .help("Analyze the photo and set the sliders to a starting point (on-device)")
+                .help("Analyze the photo and set a baseline exposure, contrast and vibrance (on-device). Nothing else changes.")
 
                 HistogramView(data: histogram)
                     .task(id: histogramKey) {
@@ -381,7 +382,7 @@ private struct AdjustmentsPanel: View {
                         onApplyPreset: { store.applyPreset($0, to: store.commandTargets.isEmpty ? [id] : store.commandTargets) },
                         onSavePreset: { isNamingPreset = true },
                         onDeletePreset: { store.deletePreset($0.id) },
-                        onAuto: { brick in Task { await store.autoBrick(brick, photoID: id) } },
+                        onAuto: { brick in Task { await store.autoBrick(brick, photoID: id, undoManager: undoManager) } },
                         onPick: { kind in
                             store.pickRequest = store.pickRequest == kind ? nil : kind
                             if store.pickRequest != nil, store.viewMode == .browser { store.enterViewer(id) }

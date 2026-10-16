@@ -399,11 +399,11 @@ struct ColorBrick: View {
                     .foregroundColor(.secondary)
             }
             ApertureSlider("Hue", value: band.hueShift, in: -180...180,
-                           format: { String(format: "%+.0f°", $0) })
+                           format: { signedReadout($0, decimals: 0, suffix: "°") })
             ApertureSlider("Saturation", value: band.saturation, in: -100...100,
-                           format: { String(format: "%+.0f", $0) })
+                           format: { signedReadout($0, decimals: 0) })
             ApertureSlider("Luminance", value: band.luminance, in: -100...100,
-                           format: { String(format: "%+.0f", $0) })
+                           format: { signedReadout($0, decimals: 0) })
             ApertureSlider("Range", value: band.spread, in: 0.2...3, default: 1,
                            format: { String(format: "%.2f", $0) })
         }
