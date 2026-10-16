@@ -31,6 +31,11 @@ enum EditRenderer {
         image = applyRedEye(edits.redEyeSpots, to: image)
         image = applyTonal(edits, to: image)
         image = applyBrushes(edits.brushLayers, to: image, sourceExtent: sourceExtent, geometry: edits)
+        // The Aperture match goes last: it was fitted against this finished
+        // render (brushes included) and Aperture's own preview.
+        if let match = edits.effective.apertureMatch, !match.isIdentity {
+            image = applyCurveStage(match, to: image)
+        }
 
         guard let output = withRenderStack({ context.createCGImage(image, from: image.extent) }) else {
             return cgImage
@@ -170,14 +175,18 @@ enum EditRenderer {
                 params["inputHighlightAmount"] = max(0.3, 1 - highlightPull)
             }
             if edits.shadowsValue != 0 {
-                params["inputShadowAmount"] = edits.shadowsValue
+                // ×1.5: Aperture's Shadows lifts harder than this filter at
+                // the same number (fitted against 240 of its renders).
+                params["inputShadowAmount"] = min(1, max(-1, edits.shadowsValue * 1.5))
             }
             params["inputRadius"] = 0
             image = image.applyingFilter("CIHighlightShadowAdjust", parameters: params)
         }
         if edits.sharpness > 0 {
+            // Half strength: at the same number this filter left about 1.4×
+            // the fine detail Aperture's sharpening does (measured at full size).
             image = image.applyingFilter("CISharpenLuminance", parameters: [
-                kCIInputSharpnessKey: edits.sharpness,
+                kCIInputSharpnessKey: edits.sharpness * 0.5,
             ])
         }
         // Curves, levels, colour bands, vignettes… (EditRendererParity).

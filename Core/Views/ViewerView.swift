@@ -1636,12 +1636,13 @@ struct ViewerView: View {
             let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
             let w = props?[kCGImagePropertyPixelWidth] as? Double ?? 0
             let h = props?[kCGImagePropertyPixelHeight] as? Double ?? 0
+            let upright = edits.appliesFileOrientation
             let options: [CFString: Any] = w * h > 64_000_000
                 ? [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                   kCGImageSourceCreateThumbnailWithTransform: true,
+                   kCGImageSourceCreateThumbnailWithTransform: upright,
                    kCGImageSourceThumbnailMaxPixelSize: 8000]
                 : [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                   kCGImageSourceCreateThumbnailWithTransform: true,
+                   kCGImageSourceCreateThumbnailWithTransform: upright,
                    kCGImageSourceThumbnailMaxPixelSize: max(w, h)]
             guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
             else { return nil }

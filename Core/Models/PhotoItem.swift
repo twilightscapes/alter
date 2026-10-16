@@ -134,13 +134,21 @@ struct CurvePoint: Codable, Equatable, Hashable {
 }
 
 /// Tone curves: an RGB curve plus optional per-channel curves, each a list
-/// of control points in 0…1 (endpoints implied). Monotone-cubic through
-/// the points at render time.
+/// of control points. Monotone-cubic through the points at render time.
+/// The ends are (0,0) and (1,1) unless the list carries its own: a point at
+/// x = 0 is a moved black end (Aperture's lifted blacks), and a last point
+/// at x ≥ 1 is a moved white end (Aperture's extended range can put it
+/// past 1).
 struct ToneCurves: Codable, Equatable, Hashable {
     var rgb: [CurvePoint] = []
     var red: [CurvePoint] = []
     var green: [CurvePoint] = []
     var blue: [CurvePoint] = []
+    /// The space the curves work in, as Aperture records it: nil (or
+    /// ≈0.4545) is the usual gamma-encoded space; 1.0 is linear light.
+    var gamma: Double? = nil
+
+    var isLinear: Bool { gamma.map { abs($0 - 1) < 0.01 } ?? false }
 
     var isIdentity: Bool {
         [rgb, red, green, blue].allSatisfy { pts in
@@ -170,6 +178,10 @@ struct Levels: Codable, Equatable, Hashable {
     var red: LevelsChannel? = nil
     var green: LevelsChannel? = nil
     var blue: LevelsChannel? = nil
+    /// Aperture's Luminance mode: the main levels move brightness only and
+    /// leave colour alone, instead of remapping R, G and B separately
+    /// (which also pushes saturation and contrast). nil = RGB mode.
+    var luminance: Bool? = nil
 
     var isIdentity: Bool {
         rgb.isIdentity && (red?.isIdentity ?? true) && (green?.isIdentity ?? true)
@@ -265,6 +277,17 @@ struct PhotoEdits: Codable, Equatable {
     var vignette: Vignette? = nil
     var devignette: Vignette? = nil
     var curves: ToneCurves? = nil
+    /// Further Curves adjustments after the first, applied in order. Aperture
+    /// allows several on one version; the Curves brick edits the first.
+    var moreCurves: [ToneCurves]? = nil
+    /// Aperture match: a per-channel tone curve fitted at import so this
+    /// photo's render lines up with the preview Aperture itself made — the
+    /// part of its look no slider translation reaches (its RAW engine, its
+    /// own filter maths). Applied last in the tonal chain; switchable off
+    /// in the Adjust panel ("apertureMatch" in disabledBricks).
+    var apertureMatch: ToneCurves? = nil
+    /// See appliesFileOrientation.
+    var rawOrientation: Bool? = nil
     var levels: Levels? = nil
     var colorBands: [ColorBand]? = nil
     var bwMix: BWMix? = nil
@@ -292,7 +315,7 @@ struct PhotoEdits: Codable, Equatable {
     var hasParityBricks: Bool {
         recovery != nil || blackPoint != nil || brightness != nil || midContrast != nil
             || definition != nil || vignette != nil || devignette != nil || curves != nil
-            || levels != nil || colorBands != nil || bwMix != nil || monochrome != nil
+            || moreCurves != nil || apertureMatch != nil || levels != nil || colorBands != nil || bwMix != nil || monochrome != nil
             || sepia != nil || polarize != nil || intensifyContrast != nil
             || noiseReduction != nil || edgeSharpen != nil || chromaticAberration != nil
     }
@@ -329,6 +352,22 @@ struct PhotoEdits: Codable, Equatable {
 
     var isNeutral: Bool { self == PhotoEdits() }
 
+    /// Draw the master's pixels as stored, ignoring the file's EXIF
+    /// orientation. Aperture's version rotation already includes the
+    /// camera's orientation, so honouring the flag as well turned its
+    /// vertical shots on their side. Set by the Aperture import, only for
+    /// masters whose flag isn't "up".
+    var appliesFileOrientation: Bool { rawOrientation != true }
+
+    /// disabledBricks entry that switches the Aperture match off.
+    static let apertureMatchKey = "apertureMatch"
+    var isApertureMatchOn: Bool { !(disabledBricks ?? []).contains(Self.apertureMatchKey) }
+    mutating func setApertureMatch(on: Bool) {
+        var list = (disabledBricks ?? []).filter { $0 != Self.apertureMatchKey }
+        if !on { list.append(Self.apertureMatchKey) }
+        disabledBricks = list.isEmpty ? nil : list
+    }
+
     /// Stable string for thumbnail cache keys — of what actually renders,
     /// so unchecking a brick is a different key and an added-but-neutral
     /// brick is not.
@@ -356,12 +395,13 @@ struct PhotoEdits: Codable, Equatable {
             hasher.combine(recovery); hasher.combine(blackPoint); hasher.combine(brightness)
             hasher.combine(midContrast)
             hasher.combine(definition); hasher.combine(vignette); hasher.combine(devignette)
-            hasher.combine(curves); hasher.combine(levels); hasher.combine(colorBands)
+            hasher.combine(curves); hasher.combine(moreCurves); hasher.combine(apertureMatch); hasher.combine(levels); hasher.combine(colorBands)
             hasher.combine(bwMix); hasher.combine(monochrome); hasher.combine(sepia)
             hasher.combine(polarize); hasher.combine(intensifyContrast)
             hasher.combine(noiseReduction); hasher.combine(edgeSharpen); hasher.combine(chromaticAberration)
             key += "|P\(hasher.finalize())"
         }
+        if rawOrientation == true { key += "|raw" }
         if hasGeometry {
             let c = crop ?? .full
             key += String(format: "|g%d,%.2f,%.4f,%.4f,%.4f,%.4f,%d%d",
@@ -545,7 +585,7 @@ extension PhotoEdits {
         case .vignette: return vignette != nil
         case .devignette: return devignette != nil
         case .noiseReduction: return noiseReduction != nil
-        case .curves: return curves != nil
+        case .curves: return curves != nil || moreCurves != nil
         case .polarize: return polarize != nil
         case .intensifyContrast: return intensifyContrast != nil
         }
@@ -647,7 +687,7 @@ extension PhotoEdits {
         case .vignette: vignette = other.vignette
         case .devignette: devignette = other.devignette
         case .noiseReduction: noiseReduction = other.noiseReduction
-        case .curves: curves = other.curves
+        case .curves: curves = other.curves; moreCurves = other.moreCurves
         case .polarize: polarize = other.polarize
         case .intensifyContrast: intensifyContrast = other.intensifyContrast
         }
@@ -670,7 +710,7 @@ extension PhotoEdits {
         case .vignette: vignette = nil
         case .devignette: devignette = nil
         case .noiseReduction: noiseReduction = nil
-        case .curves: curves = nil
+        case .curves: curves = nil; moreCurves = nil
         case .polarize: polarize = nil
         case .intensifyContrast: intensifyContrast = nil
         }
@@ -683,6 +723,7 @@ extension PhotoEdits {
         var out = self
         for name in disabledBricks ?? [] {
             if let brick = AdjustmentBrick(rawValue: name) { out.clearValues(brick) }
+            if name == PhotoEdits.apertureMatchKey { out.apertureMatch = nil }
         }
         out.disabledBricks = nil
         out.addedBricks = nil

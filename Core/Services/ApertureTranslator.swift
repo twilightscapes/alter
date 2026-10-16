@@ -125,7 +125,14 @@ enum ApertureTranslator {
                 curves.red = curvePoints(p["redCurvePoints"])
                 curves.green = curvePoints(p["greenCurvePoints"])
                 curves.blue = curvePoints(p["blueCurvePoints"])
-                if !curves.isIdentity { edits.curves = curves }
+                // Aperture records the space each Curves works in: ≈0.4545
+                // is its usual gamma space, 1.0 linear light.
+                let gamma = p.double("gamma", default: 0.4545)
+                if abs(gamma - 1) < 0.01 { curves.gamma = 1 }
+                guard !curves.isIdentity else { break }
+                // A version can carry several Curves; keep them all, in order.
+                if edits.curves == nil { edits.curves = curves }
+                else { edits.moreCurves = (edits.moreCurves ?? []) + [curves] }
 
             case "RKLevelsOperation":
                 var levels = edits.levels ?? Levels()
@@ -134,6 +141,10 @@ enum ApertureTranslator {
                     let channel = levelsChannel(p, suffix: suffix)
                     if !channel.isIdentity { levels[keyPath: keyPath] = channel }
                 }
+                // inputMode 1 is Aperture's Luminance mode (measured: as
+                // per-channel RGB it pushed 34 photos further from
+                // Aperture's renders; as luminance-only it doesn't).
+                if (p["inputMode"] as? NSNumber)?.intValue == 1 { levels.luminance = true }
                 if !levels.isIdentity { edits.levels = levels }
 
             case "RKColorOperation":
@@ -425,17 +436,24 @@ enum ApertureTranslator {
 
     // MARK: - Curves / levels / colour helpers
 
-    /// Aperture pads curves with sentinels at (0,0) and x = 5; keep the
-    /// editable points inside the unit square.
+    /// Aperture lists a curve as its black end (repeated), the editable
+    /// points, its white end, then a sentinel at x = 5. The ends carry real
+    /// settings — lifted blacks (x = 0, y > 0), a pulled-in or extended white
+    /// end — so keep them; drop only the sentinel and the repeat. A curve
+    /// whose ends sit at (0,0) and (1,1) comes back as just its inner points.
     private static func curvePoints(_ raw: Any?) -> [CurvePoint] {
         guard let list = raw as? [Any] else { return [] }
         var pts: [CurvePoint] = []
         for case let d as [String: Any] in list {
             let x = d.double("x"), y = d.double("y")
-            guard x > 0.0001, x < 0.9999 else { continue }
+            guard x >= 0, x < 4.9 else { continue }
+            if let last = pts.last, abs(last.x - x) < 0.0001 { continue }
             pts.append(CurvePoint(x: x, y: clamp(y, 0, 1)))
         }
-        return pts.sorted { $0.x < $1.x }
+        pts.sort { $0.x < $1.x }
+        if let first = pts.first, first.x < 0.0001, first.y < 0.0001 { pts.removeFirst() }
+        if let last = pts.last, abs(last.x - 1) < 0.0001, abs(last.y - 1) < 0.0001 { pts.removeLast() }
+        return pts
     }
 
     private static func levelsChannel(_ p: [String: Any], suffix: String) -> LevelsChannel {

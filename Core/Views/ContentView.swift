@@ -52,11 +52,11 @@ struct ContentView: View {
                 keyCommands = commands
             }
         }
-        .alert("Something went wrong", isPresented: Binding(
+        .alert(store.alertTitle ?? "Something went wrong", isPresented: Binding(
             get: { store.alertMessage != nil },
-            set: { if !$0 { store.alertMessage = nil } }
+            set: { if !$0 { store.alertMessage = nil; store.alertTitle = nil } }
         )) {
-            Button("OK", role: .cancel) { store.alertMessage = nil }
+            Button("OK", role: .cancel) { store.alertMessage = nil; store.alertTitle = nil }
         } message: {
             Text(store.alertMessage ?? "")
         }

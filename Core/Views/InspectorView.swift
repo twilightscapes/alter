@@ -390,6 +390,29 @@ private struct AdjustmentsPanel: View {
                         activePick: store.pickRequest)
                 }
 
+                if item.edits.apertureMatch != nil {
+                    let edits = store.editsBinding(for: id)
+                    Toggle(isOn: Binding(
+                        get: { edits.wrappedValue.isApertureMatchOn },
+                        set: { on in
+                            var e = edits.wrappedValue
+                            e.setApertureMatch(on: on)
+                            edits.wrappedValue = e
+                        })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Aperture match")
+                                .font(.caption.weight(.semibold))
+                            Text("A tone curve fitted at import so this photo looks the way Aperture rendered it.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help("Uncheck to see the photo with only the translated Aperture adjustments.")
+                }
+
                 Button("Reset All Adjustments") {
                     store.resetEdits(for: id)
                 }

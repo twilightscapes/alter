@@ -102,7 +102,7 @@ final class ImageLoader {
         isImageFile(url) || isVideoFile(url)
     }
 
-    private func cgThumbnail(url: URL, maxPixel: Int) -> CGImage? {
+    private func cgThumbnail(url: URL, maxPixel: Int, applyOrientation: Bool = true) -> CGImage? {
         if Self.isVideoFile(url) {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
             generator.appliesPreferredTrackTransform = true
@@ -113,10 +113,29 @@ final class ImageLoader {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceCreateThumbnailWithTransform: applyOrientation,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// The full-size master, upright per the recipe: EXIF orientation
+    /// applied unless the recipe draws raw pixels (Aperture imports).
+    /// CGImageSourceCreateImageAtIndex never applies orientation at all, so
+    /// renders built on it showed ordinary vertical photos sideways.
+    static func decodeFull(_ url: URL, edits: PhotoEdits) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        if !edits.appliesFileOrientation {
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let w = (props?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let h = (props?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(w, h, 1),
+        ] as CFDictionary)
     }
 
     /// Rendered image (cached). The key includes the pixel size — the grid's
@@ -130,7 +149,8 @@ final class ImageLoader {
     func thumbnail(for url: URL, edits: PhotoEdits = PhotoEdits(), maxPixel: Int = 320) -> NSImage? {
         let key = NSURL(fileURLWithPath: url.path + "#\(maxPixel)#" + edits.cacheKey)
         if let cached = cache.object(forKey: key) { return cached }
-        guard var cg = cgThumbnail(url: url, maxPixel: maxPixel) else { return nil }
+        guard var cg = cgThumbnail(url: url, maxPixel: maxPixel,
+                                   applyOrientation: edits.appliesFileOrientation) else { return nil }
         cg = EditRenderer.apply(edits, to: cg)
         let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         cache.setObject(image, forKey: key, cost: cg.width * cg.height)
