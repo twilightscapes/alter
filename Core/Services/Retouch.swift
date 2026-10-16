@@ -40,7 +40,7 @@ extension RetouchSpot {
         return spot
     }
 
-    var isFill: Bool { fill == true && clone != true }
+    var isFill: Bool { (fill == true || maskPath != nil) && clone != true }
     var isHeal: Bool { clone != true && fill != true }
 }
 
@@ -109,8 +109,17 @@ enum RetouchRenderer {
 
     /// Content-aware fill: rebuilt from patches found around the spot.
     private static func fill(_ spot: RetouchSpot, image: CIImage, extent: CGRect) -> CIImage {
-        let circles = circles(spot, extent: extent)
-        let target = bounds(circles, pad: 1).intersection(extent)
+        let circles = spot.maskPath == nil ? circles(spot, extent: extent) : []
+        var target = bounds(circles, pad: 1).intersection(extent)
+        var maskImage: CIImage?
+        if let path = spot.maskPath, let box = spot.maskBox {
+            guard let mask = selectionMask(path, extent: extent) else { return image }
+            maskImage = mask
+            target = CGRect(x: extent.minX + box.x * extent.width,
+                            y: extent.minY + (1 - box.y - box.h) * extent.height,
+                            width: box.w * extent.width, height: box.h * extent.height)
+                .insetBy(dx: -2, dy: -2).integral.intersection(extent)
+        }
         guard !target.isEmpty else { return image }
         // Where patches may come from: around the spot, generously, but
         // never past the frame (clamped edges would make fake texture).
@@ -124,7 +133,8 @@ enum RetouchRenderer {
             "opacity": min(max(spot.opacity ?? 1, 0), 1),
             "seed": spot.variant ?? 0,
         ]
-        guard let filled = try? FillKernel.apply(withExtent: target, inputs: [image], arguments: args)
+        guard let filled = try? FillKernel.apply(withExtent: target, inputs: [image] + (maskImage.map { [$0] } ?? []),
+                                                 arguments: args)
         else { return image }
         let box = CIImage(color: .white).cropped(to: target)
         return filled.applyingFilter("CIBlendWithMask", parameters: [
@@ -132,6 +142,30 @@ enum RetouchRenderer {
             kCIInputMaskImageKey: box,
         ]).cropped(to: extent)
     }
+
+    /// A selection mask scaled over `extent` (it was saved at the size the
+    /// photo was shown at; renders at other sizes stretch it to fit).
+    private static func selectionMask(_ path: String, extent: CGRect) -> CIImage? {
+        maskLock.lock()
+        var mask = maskCache[path]
+        maskLock.unlock()
+        if mask == nil {
+            guard let loaded = CIImage(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+            maskLock.lock()
+            if maskCache.count > 32 { maskCache.removeAll() }
+            maskCache[path] = loaded
+            maskLock.unlock()
+            mask = loaded
+        }
+        guard let mask, mask.extent.width > 0 else { return nil }
+        return mask.samplingLinear()
+            .transformed(by: CGAffineTransform(scaleX: extent.width / mask.extent.width,
+                                               y: extent.height / mask.extent.height))
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+            .cropped(to: extent)
+    }
+    private static let maskLock = NSLock()
+    nonisolated(unsafe) private static var maskCache: [String: CIImage] = [:]
 
     /// Clone: a straight copy from the source through a soft-edged mask.
     private static func clone(_ spot: RetouchSpot, image: CIImage, extent: CGRect) -> CIImage {
@@ -233,7 +267,25 @@ final class FillKernel: CIImageProcessorKernel {
         let circles = stride(from: 0, to: flat.count - 2, by: 3).map { SIMD3(flat[$0], flat[$0 + 1], flat[$0 + 2]) }
 
         let pw = Int(pool.width), ph = Int(pool.height), px0 = Int(pool.minX), py0 = Int(pool.minY)
-        let edge = Heal.edgeField(width: pw, height: ph, originX: px0, originY: py0, circles: circles, reach: 1)
+        // The hole: the brush's circles, or a selection's mask (second input).
+        let maskBuffer = inputs!.count > 1
+            ? PixelBuffer(inputs![1].baseAddress, bytesPerRow: inputs![1].bytesPerRow, region: inputs![1].region) : nil
+        var edge: [Double]
+        if let maskBuffer {
+            // Mask value → a pseudo edge distance: ≤ 0 inside (rebuilt),
+            // and the feather below reads it back as the mask's own softness.
+            edge = [Double](repeating: .greatestFiniteMagnitude, count: pw * ph)
+            for j in 0..<ph {
+                for i in 0..<pw {
+                    let x = px0 + i, y = py0 + j
+                    guard target.contains(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)) else { continue }
+                    let m = Double(maskBuffer.read(x, y).x)
+                    if m > 0.02 { edge[j * pw + i] = -m }
+                }
+            }
+        } else {
+            edge = Heal.edgeField(width: pw, height: ph, originX: px0, originY: py0, circles: circles, reach: 1)
+        }
 
         // Same pixels, same spot → same fill: renders repeat (every slider
         // move re-renders the recipe), so the fill is remembered.
@@ -248,19 +300,19 @@ final class FillKernel: CIImageProcessorKernel {
                 checksum += Double(v.x + 2 * v.y + 3 * v.z) * Double((j * pw + i) % 9973 + 1)
             }
         }
-        let key = "\(flat.hashValue)#\(pool)#\(seed)#\(checksum)"
+        let key = "\(flat.hashValue)#\(pool)#\(seed)#\(checksum)#\(maskBuffer != nil)"
         let filled: [SIMD3<Float>]
         if let cached = FillCache.shared.get(key) {
             filled = cached
         } else {
-            var grid = Inpaint.Grid(width: pw, height: ph, pixels: pixels, hole: hole)
-            Inpaint.fill(&grid, seed: UInt64(truncatingIfNeeded: seed))
-            filled = grid.pixels
+            filled = Self.inpaint(pixels: pixels, hole: hole, width: pw, height: ph, seed: seed)
             FillCache.shared.set(key, filled)
         }
 
         let radius = circles.first?.z ?? 1
-        let feather = max(1, softness * radius * 0.35)
+        // A mask carries its own soft edge (edge = -mask value); circles
+        // feather over the last stretch of the radius.
+        let feather = maskBuffer != nil ? 1 : max(1, softness * radius * 0.35)
         let region = output.region
         for y in Int(region.minY)..<Int(region.maxY) {
             for x in Int(region.minX)..<Int(region.maxX) {
@@ -278,6 +330,47 @@ final class FillKernel: CIImageProcessorKernel {
                 dst.write(x, y, original + (rebuilt - original) * a)
             }
         }
+    }
+}
+
+extension FillKernel {
+    /// Inpaint, shrinking a big pool first: a large removal (a whole car)
+    /// rebuilds at most ~700 px across and is lifted back up — softer than
+    /// full resolution, but seconds instead of minutes.
+    static func inpaint(pixels: [SIMD3<Float>], hole: [Bool], width w: Int, height h: Int, seed: Int) -> [SIMD3<Float>] {
+        let f = max(1, Int((Double(max(w, h)) / 700).rounded(.up)))
+        guard f > 1 else {
+            var grid = Inpaint.Grid(width: w, height: h, pixels: pixels, hole: hole)
+            Inpaint.fill(&grid, seed: UInt64(truncatingIfNeeded: seed))
+            return grid.pixels
+        }
+        let sw = (w + f - 1) / f, sh = (h + f - 1) / f
+        var small = [SIMD3<Float>](repeating: .zero, count: sw * sh)
+        var smallHole = [Bool](repeating: false, count: sw * sh)
+        var count = [Float](repeating: 0, count: sw * sh)
+        for j in 0..<h {
+            for i in 0..<w {
+                let k = (j / f) * sw + i / f
+                if hole[j * w + i] { smallHole[k] = true } else { small[k] += pixels[j * w + i]; count[k] += 1 }
+            }
+        }
+        for k in 0..<(sw * sh) where count[k] > 0 { small[k] /= count[k] }
+        var grid = Inpaint.Grid(width: sw, height: sh, pixels: small, hole: smallHole)
+        Inpaint.fill(&grid, seed: UInt64(truncatingIfNeeded: seed))
+        var out = pixels
+        for j in 0..<h {
+            for i in 0..<w where hole[j * w + i] {
+                let gx = max(0, min(Float(sw - 1), (Float(i) + 0.5) / Float(f) - 0.5))
+                let gy = max(0, min(Float(sh - 1), (Float(j) + 0.5) / Float(f) - 0.5))
+                let x0 = Int(gx), y0 = Int(gy), x1 = min(sw - 1, x0 + 1), y1 = min(sh - 1, y0 + 1)
+                let tx = gx - Float(x0), ty = gy - Float(y0)
+                let g = grid.pixels
+                let top = g[y0 * sw + x0] * (1 - tx) + g[y0 * sw + x1] * tx
+                let bottom = g[y1 * sw + x0] * (1 - tx) + g[y1 * sw + x1] * tx
+                out[j * w + i] = top * (1 - ty) + bottom * ty
+            }
+        }
+        return out
     }
 }
 

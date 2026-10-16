@@ -34,6 +34,8 @@ struct ViewerView: View {
     @State private var retouchMode = false
     /// The Retouch tool (X): brush, spots, selection — see RetouchTool.
     @StateObject private var retouch = RetouchTool()
+    /// An extension's viewer tool that's active (ViewerToolSpec.id).
+    @State private var extensionToolID: String?
     // Red Eye (E).
     @State private var redEyeMode = false
     @State private var redEyeRadius = 0.012
@@ -150,7 +152,7 @@ struct ViewerView: View {
     /// placing heal spots, and not once an adjustment is baked in (those all
     /// need the rendered frame-0 with its overlays).
     private var showAnimatedGIF: Bool {
-        isAnimatedGIF && !cropMode && !retouchMode && (item?.edits.isNeutral ?? true)
+        isAnimatedGIF && !cropMode && !retouchMode && extensionToolID == nil && (item?.edits.isNeutral ?? true)
     }
 
     /// What the viewer actually renders: in crop mode, the recipe minus its
@@ -198,6 +200,7 @@ struct ViewerView: View {
             sourceImage: image,
             onResult: handlePlaygroundResult))
         .onChange(of: store.viewerPhotoID) { _ in
+            extensionToolID = nil
             retouchMode = false
             retouch.reset()
             cropMode = false
@@ -213,6 +216,12 @@ struct ViewerView: View {
             // per-photo, so drop it and let the task rebuild.
             loupeFullImage = nil
             loupeRenderKey = ""
+        }
+        .onChange(of: "\(retouchMode)\(cropMode)\(redEyeMode)\(straightenMode)\(brushMode)\(loupeMode)\(compareMode)") { _ in
+            // Any core tool taking over the photo puts an extension's down.
+            if retouchMode || cropMode || redEyeMode || straightenMode || brushMode || loupeMode || compareMode {
+                extensionToolID = nil
+            }
         }
         .onChange(of: retouchMode) { on in
             retouch.reset()
@@ -561,6 +570,10 @@ struct ViewerView: View {
                         if redEyeMode, let item {
                             redEyeMarkers(for: item, fit: fit)
                         }
+                        if let spec = activeExtensionTool, let item {
+                            spec.overlay(toolContext(item, fit: fit))
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
                         if cropMode, let item {
                             cropOverlay(for: item, fit: fit)
                         }
@@ -589,7 +602,7 @@ struct ViewerView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
-                        guard !retouchMode && !cropMode && !redEyeMode else { return }
+                        guard !retouchMode && !cropMode && !redEyeMode && extensionToolID == nil else { return }
                         // Zoomed: double-click goes back to fit (Aperture's
                         // viewer); fitted: back to the grid as before.
                         if isZoomed { viewerZoom = nil } else { store.exitViewer() }
@@ -601,7 +614,7 @@ struct ViewerView: View {
                     .gesture(cropMode ? cropGesture(fit: fit) : nil)
                     .gesture(straightenMode ? straightenGesture(fit: fit) : nil)
                     .gesture(brushMode ? brushGesture(fit: fit) : nil)
-                    .gesture(isZoomed && !cropMode && !brushMode && !retouchMode && !wbPicking
+                    .gesture(isZoomed && !cropMode && !brushMode && !retouchMode && !wbPicking && extensionToolID == nil
                              && (loupeFocusCursor || !loupeMode) ? panGesture(fit: fit, container: geo.size) : nil)
                     .overlay(alignment: .bottomTrailing) {
                         if isZoomed, loupeFullImage != nil,
@@ -785,7 +798,9 @@ struct ViewerView: View {
 
     private var controlTray: some View {
         HStack(spacing: 12) {
-            if retouchMode, let item {
+            if let spec = activeExtensionTool, let item {
+                spec.tray(toolContext(item, fit: .zero))
+            } else if retouchMode, let item {
                 RetouchControls(tool: retouch, edits: store.editsBinding(for: item.id), undo: undoManager) {
                     retouchMode = false
                 }
@@ -938,6 +953,17 @@ struct ViewerView: View {
                         Label("Red Eye", systemImage: "eye")
                     }
                     .help("Click each red pupil (E)")
+                    ForEach(AlterExtensions.shared.viewerModeTools) { spec in
+                        Button {
+                            openExtensionTool(spec.id)
+                        } label: {
+                            Label(spec.title, systemImage: spec.systemImage)
+                        }
+                        .background(extensionToolID == spec.id
+                            ? RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.3))
+                            : nil)
+                        .help(spec.help)
+                    }
                     Menu {
                         ForEach(QuickBrush.allCases) { quick in
                             Button(quick.name) {
@@ -1816,6 +1842,32 @@ struct ViewerView: View {
         undoManager?.setActionName("Neutral White Balance")
     }
 
+    // MARK: - Extension tools
+
+    private var activeExtensionTool: ViewerToolSpec? {
+        guard let id = extensionToolID else { return nil }
+        return AlterExtensions.shared.viewerModeTools.first { $0.id == id }
+    }
+
+    private func toolContext(_ item: PhotoItem, fit: CGRect) -> ViewerToolContext {
+        ViewerToolContext(item: item, store: store, fit: fit, undo: undoManager) {
+            extensionToolID = nil
+        }
+    }
+
+    /// Pick up an extension's tool: every core tool goes down first.
+    private func openExtensionTool(_ id: String) {
+        retouchMode = false
+        cropMode = false
+        redEyeMode = false
+        straightenMode = false
+        loupeMode = false
+        compareMode = false
+        store.pickRequest = nil
+        if brushMode { exitBrushMode() }
+        extensionToolID = id
+    }
+
     // MARK: - Retouch
 
     /// The image's letterboxed rect inside the container (scaledToFit).
@@ -2271,7 +2323,9 @@ struct ViewerView: View {
     private var hiddenShortcuts: some View {
         Group {
             Button("") {
-                if retouchMode, retouch.selection != nil {
+                if extensionToolID != nil {
+                    extensionToolID = nil
+                } else if retouchMode, retouch.selection != nil {
                     retouch.selection = nil
                 } else if retouchMode {
                     retouchMode = false
@@ -2338,6 +2392,13 @@ struct ViewerView: View {
                 if redEyeMode { cropMode = false; straightenMode = false; retouchMode = false; loupeMode = false; compareMode = false }
             }
             .keyboardShortcut("e", modifiers: [])
+            ForEach(AlterExtensions.shared.viewerModeTools.filter { $0.key != nil }) { spec in
+                Button("") {
+                    guard item?.isVideo != true else { return }
+                    if extensionToolID == spec.id { extensionToolID = nil } else { openExtensionTool(spec.id) }
+                }
+                .keyboardShortcut(spec.key!, modifiers: [])
+            }
             Button("") { store.showHotCold.toggle() }
                 .keyboardShortcut("h", modifiers: [.option, .shift])
             Button("") { store.primaryOnly.toggle() }

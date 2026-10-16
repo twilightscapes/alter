@@ -68,6 +68,66 @@ enum EditRenderer {
     /// simple. Straighten keeps the extent size constant (it scales the
     /// rotated image up to cover), so crop coordinates stay stable while the
     /// angle changes.
+    /// The geometry as one transform: a point of the master at
+    /// `sourceExtent` (CI coordinates) lands at T(point) in the
+    /// geometry-applied image, which then starts at the origin. Mirrors
+    /// applyGeometry step for step, so a mask drawn over the edited photo
+    /// can be carried back onto the master (T inverted) and stay on its
+    /// object whatever the crop does later.
+    static func geometryTransform(_ edits: PhotoEdits, sourceExtent: CGRect) -> CGAffineTransform {
+        guard edits.hasGeometry else {
+            return CGAffineTransform(translationX: -sourceExtent.minX, y: -sourceExtent.minY)
+        }
+        let probe = CIImage(color: .black).cropped(to: sourceExtent)
+        var total = CGAffineTransform.identity
+        var extent = sourceExtent
+        func step(_ t: CGAffineTransform) {
+            total = total.concatenating(t)
+            extent = extent.applying(t)
+        }
+        let orientation: CGImagePropertyOrientation? = {
+            switch edits.rotationQuarters {
+            case 1: return .right
+            case 2: return .down
+            case 3: return .left
+            default: return nil
+            }
+        }()
+        if let orientation { step(probe.orientationTransform(for: orientation)) }
+        step(CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+        if edits.flipHorizontal == true || edits.flipVertical == true {
+            let w = extent.width, h = extent.height
+            var t = CGAffineTransform.identity
+            if edits.flipHorizontal == true { t = t.translatedBy(x: w, y: 0).scaledBy(x: -1, y: 1) }
+            if edits.flipVertical == true { t = t.translatedBy(x: 0, y: h).scaledBy(x: 1, y: -1) }
+            step(t)
+            step(CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+        }
+        let degrees = edits.straightenDegrees
+        if degrees != 0 {
+            let radians = degrees * .pi / 180
+            let w = extent.width, h = extent.height
+            let cosA = abs(cos(radians)), sinA = abs(sin(radians))
+            let scale = max((w * cosA + h * sinA) / w, (w * sinA + h * cosA) / h)
+            let before = extent
+            step(CGAffineTransform.identity
+                .translatedBy(x: w / 2, y: h / 2)
+                .scaledBy(x: scale, y: scale)
+                .rotated(by: -radians)
+                .translatedBy(x: -w / 2, y: -h / 2))
+            extent = before // cropped back to the frame
+        }
+        if let crop = edits.crop, crop != .full {
+            let c = crop.clamped()
+            let rect = CGRect(x: extent.minX + c.x * extent.width,
+                              y: extent.minY + (1 - c.y - c.h) * extent.height,
+                              width: c.w * extent.width, height: c.h * extent.height)
+            extent = rect
+            step(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        }
+        return total
+    }
+
     static func applyGeometry(_ edits: PhotoEdits, to input: CIImage) -> CIImage {
         guard edits.hasGeometry else { return input }
         var image = input
@@ -259,6 +319,10 @@ enum EditRenderer {
                                               geometry: geometry ?? PhotoEdits())
                 else { continue }
                 mask = raster.cropped(to: image.extent)
+                // A selection touched up with the Brush.
+                if !layer.strokes.isEmpty {
+                    mask = brushMask(layer.strokes, extent: image.extent, base: mask)
+                }
             } else if !layer.strokes.isEmpty {
                 mask = brushMask(layer.strokes, extent: image.extent)
             } else if layer.inverted == true {
@@ -282,8 +346,11 @@ enum EditRenderer {
     /// Strokes → grayscale mask, in stroke order so an erase carves out
     /// whatever was painted before it. White applies, black protects;
     /// softness feathers the disc's edge.
-    static func brushMask(_ strokes: [BrushStroke], extent: CGRect) -> CIImage {
-        var mask = CIImage(color: .black).cropped(to: extent)
+    /// Strokes painted over `base` (black when nil): add strokes in white,
+    /// erase strokes in black — so a selection mask can be touched up.
+    static func brushMask(_ strokes: [BrushStroke], extent: CGRect, base: CIImage? = nil) -> CIImage {
+        var mask = base?.cropped(to: extent).composited(over: CIImage(color: .black).cropped(to: extent))
+            ?? CIImage(color: .black).cropped(to: extent)
         for stroke in strokes {
             let radius = max(stroke.radius, 0.001) * extent.width
             // Normalized top-left origin → CI bottom-left.
