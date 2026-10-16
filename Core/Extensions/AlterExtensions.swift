@@ -25,6 +25,32 @@ struct InspectorTabSpec: Identifiable {
     var standalone: (LibraryStore) -> Bool = { _ in false }
 }
 
+/// What a viewer tool works with while it's active.
+struct ViewerToolContext {
+    let item: PhotoItem
+    let store: LibraryStore
+    /// The photo's rect in the viewer (view points; zoom and pan applied).
+    /// Zero for the tray, which doesn't sit over the photo.
+    let fit: CGRect
+    let undo: UndoManager?
+    /// Leave the tool.
+    let close: () -> Void
+}
+
+/// A tool an extension adds to the viewer: a tool-strip button that, while
+/// it's active, owns the photo (its own overlay, its own mouse handling)
+/// and the tray — the way Crop and Retouch do.
+struct ViewerToolSpec: Identifiable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let help: String
+    /// A single key that picks the tool up in the viewer, if any.
+    var key: KeyEquivalent? = nil
+    let overlay: (ViewerToolContext) -> AnyView
+    let tray: (ViewerToolContext) -> AnyView
+}
+
 @MainActor
 final class AlterExtensions {
     static let shared = AlterExtensions()
@@ -82,6 +108,8 @@ final class AlterExtensions {
     var captionAccessory: ((Int64, LibraryStore) -> AnyView)?
     /// Extra buttons in the viewer's tool strip.
     var viewerTools: ((PhotoItem, LibraryStore) -> AnyView)?
+    /// Whole tools in the viewer (button, overlay, tray), after Red Eye.
+    var viewerModeTools: [ViewerToolSpec] = []
     /// Extra entries at the bottom of the Library sidebar section.
     var librarySidebarItems: ((LibraryStore) -> AnyView)?
 

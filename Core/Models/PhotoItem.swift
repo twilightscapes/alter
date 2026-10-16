@@ -58,6 +58,11 @@ struct RetouchSpot: Codable, Equatable, Hashable {
     /// single source (dx/dy unused). `variant` picks another fill.
     var fill: Bool? = nil
     var variant: Int? = nil
+    /// A Remove shaped by a selection instead of the brush: a grayscale
+    /// mask the size of the edited photo (white = rebuild), and its bounds
+    /// (normalized, top-left) so the fill only works where it must.
+    var maskPath: String? = nil
+    var maskBox: CropRect? = nil
 }
 
 struct RetouchPoint: Codable, Equatable, Hashable {
@@ -394,6 +399,7 @@ struct PhotoEdits: Codable, Equatable {
                           spot.softness ?? 0.45, spot.opacity ?? 1)
             if spot.clone == true { key += "c" }
             if spot.fill == true { key += "f\(spot.variant ?? 0)" }
+            if let mask = spot.maskPath { key += "m\(mask)" }
             for p in spot.trail ?? [] { key += String(format: "~%.4f,%.4f", p.x, p.y) }
         }
         for eye in redEyes ?? [] {

@@ -278,14 +278,27 @@ struct RetouchOverlay: View {
             .min() ?? .greatestFiniteMagnitude
     }
 
+    /// A selection-shaped Remove's bounds in view points.
+    private func boxRect(_ spot: RetouchSpot) -> CGRect? {
+        guard let box = spot.maskBox else { return nil }
+        return CGRect(x: fit.minX + box.x * fit.width, y: fit.minY + box.y * fit.height,
+                      width: box.w * fit.width, height: box.h * fit.height)
+    }
+
     private func hit(_ p: CGPoint) -> (Drag, Int)? {
-        if let i = tool.selection, let spot = spots[safe: i] {
+        // Selection-shaped Removes (from the Select tool) select by their
+        // bounds; they can be deleted or retried, not reshaped here.
+        for (i, spot) in spots.enumerated().reversed() {
+            if let rect = boxRect(spot), rect.contains(p) { return (.move, i) }
+        }
+        if let i = tool.selection, let spot = spots[safe: i], spot.maskBox == nil {
             let r = viewRadius(spot.radius)
             let d = distance(p, to: spot)
             if abs(d - r) < 6 { return (.resize, i) }
             if !spot.isFill, distance(p, to: spot, source: true) < r { return (.source, i) }
         }
-        for (i, spot) in spots.enumerated().reversed() where distance(p, to: spot) < viewRadius(spot.radius) {
+        for (i, spot) in spots.enumerated().reversed()
+        where spot.maskBox == nil && distance(p, to: spot) < viewRadius(spot.radius) {
             return (.move, i)
         }
         return nil
@@ -308,6 +321,15 @@ struct RetouchOverlay: View {
             for (i, spot) in spots.enumerated() {
                 let target = centreLine(spot)
                 let r = viewRadius(spot.radius)
+                if let rect = boxRect(spot) {
+                    guard i == tool.selection || hover != nil || drag != nil else { continue }
+                    let path = Path(roundedRect: rect, cornerRadius: 4)
+                    let selected = i == tool.selection
+                    context.stroke(path, with: .color(shadow), style: StrokeStyle(lineWidth: selected ? 3.5 : 2, dash: [5, 4]))
+                    context.stroke(path, with: .color(.white.opacity(selected ? 1 : 0.55)),
+                                   style: StrokeStyle(lineWidth: selected ? 2 : 1, dash: [5, 4]))
+                    continue
+                }
                 if i == tool.selection, spot.isFill {
                     outline(target, r: r, color: shadow, width: 3.5, in: &context)
                     outline(target, r: r, color: .white, width: 2, in: &context)
@@ -397,7 +419,7 @@ struct RetouchOverlay: View {
                 stroke.append(clamped(value.location))
             }
         case .move:
-            guard let i = tool.selection, startSpots.indices.contains(i) else { return }
+            guard let i = tool.selection, startSpots.indices.contains(i), startSpots[i].maskBox == nil else { return }
             var updated = startSpots
             // The target moves; its source stays where it was.
             updated[i] = startSpots[i].moved(by: dx, dy)
