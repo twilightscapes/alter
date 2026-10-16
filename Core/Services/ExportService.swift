@@ -145,7 +145,8 @@ struct ExportService {
 
         let thumbOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
+            // Aperture imports draw raw pixels; their rotation covers it.
+            kCGImageSourceCreateThumbnailWithTransform: item.edits.appliesFileOrientation,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,
         ]
         guard var cg = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else {

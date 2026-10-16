@@ -49,6 +49,8 @@ final class LibraryStore: ObservableObject {
     @Published var exiftoolMissing = !ExifToolService.isAvailable
     /// Errors worth a real dialog (export/publish failures), not just status text.
     @Published var alertMessage: String?
+    /// Title for the alertMessage alert; nil = "Something went wrong".
+    @Published var alertTitle: String?
     /// The grid scrolls this photo into view (fresh imports), then clears it.
     @Published var revealID: Int64?
 
@@ -384,6 +386,7 @@ final class LibraryStore: ObservableObject {
             lines.append("Adjustments Alter can't reproduce yet were skipped: \(list). Compare mode shows Aperture's own render for every photo.")
         }
         guard lines.count > 1 else { return }
+        alertTitle = "Aperture library opened"
         alertMessage = lines.joined(separator: "\n\n")
     }
 

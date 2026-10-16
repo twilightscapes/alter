@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import ImageIO
 
 enum ApertureImporter {
     struct Progress {
@@ -113,6 +114,9 @@ enum ApertureImporter {
                 guard let family = byMaster[master.uuid], let working = family.first else { continue }
                 let url = ap.fileURL(for: master)
                 if master.isMissing || !fm.fileExists(atPath: url.path) { summary.missingFiles += 1 }
+                // Aperture's rotation already includes the camera's
+                // orientation; the recipe must not apply the file's flag too.
+                let fileIsTurned = Self.orientationIsTurned(url)
 
                 // As-shot white balance, if any sibling version still has
                 // Aperture's defaults — lets edited WB translate as a shift.
@@ -135,6 +139,7 @@ enum ApertureImporter {
                         maskURL: { ap.maskURL(for: $0) })
                     var edits = ApertureTranslator.edits(from: familyAdjustments[v.uuid] ?? [],
                                                          context: context, report: &summary.report)
+                    if fileIsTurned { edits.rawOrientation = true }
                     // Tone or colour was edited: nudge the recipe until our
                     // render agrees with Aperture's on brightness and balance.
                     if matchRenders, ApertureMatcher.touchesToneOrColor(edits),
@@ -347,5 +352,17 @@ enum ApertureImporter {
         // queryMatchType: 1 = all of the rules, anything else = any.
         let matchAll = (query["queryMatchType"] as? Int ?? 1) == 1
         return SmartAlbumRules(matchAll: matchAll, rules: rules)
+    }
+}
+
+extension ApertureImporter {
+    /// The file's EXIF orientation flag is anything but "up" (1). Aperture
+    /// folds that orientation into its version rotation, so those masters
+    /// are drawn from raw pixels (PhotoEdits.rawOrientation).
+    static func orientationIsTurned(_ url: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let o = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue else { return false }
+        return o != 1
     }
 }

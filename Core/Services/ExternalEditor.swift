@@ -57,7 +57,7 @@ enum ExternalEditor {
         let h = props?[kCGImagePropertyPixelHeight] as? Double ?? 0
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceCreateThumbnailWithTransform: item.edits.appliesFileOrientation,
             kCGImageSourceThumbnailMaxPixelSize: max(w, h, 1),
         ]
         guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {

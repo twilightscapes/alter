@@ -6,14 +6,19 @@
 //  License, v. 2.0. If a copy of the MPL was not distributed with this
 //  file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Closes the gap between ALTer's render of a translated recipe and the
-//  JPEG Aperture itself rendered for that version. Two decoders never agree
-//  on a RAW file's base brightness and white balance, and Aperture's
-//  absolute kelvin can't be turned into a shift without knowing the
-//  as-shot value — so, for versions whose tone or colour was edited, the
-//  recipe's exposure and white balance are nudged (within bounds) until
-//  the small renders match in mean luminance and colour balance. Geometry-
-//  only versions are left exactly as translated.
+//  Closes the gap between Alter's render of a translated recipe and the
+//  JPEG Aperture itself rendered for that version. Two RAW engines and two
+//  sets of filter maths never agree exactly, and slider translation alone
+//  left edited photos far from Aperture (measured: ΔE 11 against 3.9 for
+//  unedited ones). So, for versions whose tone or colour was edited, a
+//  per-channel tone curve is fitted that maps Alter's finished render onto
+//  Aperture's preview by matching their R, G and B distributions, and
+//  stored as the recipe's Aperture match (applied last; switchable off).
+//  Measured on a 379-photo library: ΔE 11.2 → 5.1 (with the strength fixes in EditRenderer).
+//
+//  It replaces an exposure + white-balance nudge that compensated for the
+//  translation's errors with colour casts (tint hit its +60 cap on 28
+//  photos and reddened the library on average).
 //
 
 import CoreImage
@@ -23,10 +28,6 @@ import ImageIO
 enum ApertureMatcher {
     private static let context = CIContext()
 
-    /// Max correction we'll attribute to decoder differences.
-    static let maxExposureEV = 1.5
-    static let maxWhiteBalance = 60.0
-
     /// True when the recipe touches tone or colour (not just geometry/retouch).
     static func touchesToneOrColor(_ e: PhotoEdits) -> Bool {
         e.exposure != 0 || e.contrast != 1 || e.saturation != 1 || e.vibrance != 0
@@ -34,44 +35,64 @@ enum ApertureMatcher {
             || e.hasParityBricks || !e.brushLayers.isEmpty
     }
 
-    /// Returns the adjusted recipe, or nil when nothing could be measured.
+    /// Where the fitted curve samples the two distributions.
+    private static let quantiles = [0.0, 0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98, 1.0]
+
+    /// The recipe with its Aperture match fitted, or nil when either image
+    /// couldn't be read.
     static func match(_ edits: PhotoEdits, masterURL: URL, previewURL: URL) -> PhotoEdits? {
-        guard let master = decode(masterURL, maxPixel: 320),
-              let preview = decode(previewURL, maxPixel: 320) else { return nil }
-        guard let target = meanRGB(CIImage(cgImage: preview)) else { return nil }
-        var out = edits
-
-        // Exposure: match mean luminance in linear light.
-        let rendered = EditRenderer.apply(out, to: master)
-        guard let ours = meanRGB(CIImage(cgImage: rendered)) else { return nil }
-        let lumT = luminance(target), lumO = luminance(ours)
-        if lumT > 0.002, lumO > 0.002 {
-            let ev = log2(lumT / lumO)
-            out.exposure += min(maxExposureEV, max(-maxExposureEV, ev))
-        }
-
-        // White balance: the cast ours has relative to Aperture's, solved
-        // with the same math as the eyedropper.
-        let rendered2 = EditRenderer.apply(out, to: master)
-        if let ours2 = meanRGB(CIImage(cgImage: rendered2)), ours2.g > 0.002, target.g > 0.002 {
-            // Normalise both to green so exposure doesn't leak in.
-            let r = (ours2.r / ours2.g) / (target.r / target.g)
-            let b = (ours2.b / ours2.g) / (target.b / target.g)
-            if abs(r - 1) > 0.01 || abs(b - 1) > 0.01 {
-                let solved = EditRenderer.neutralizeWhiteBalance(r: r, g: 1, b: b)
-                out.temperature = clamp(out.temperature + solved.temperature, maxWhiteBalance)
-                out.tint = clamp(out.tint + solved.tint, maxWhiteBalance)
+        guard let master = decode(masterURL, maxPixel: 480),
+              let preview = decode(previewURL, maxPixel: 480) else { return nil }
+        var base = edits
+        base.apertureMatch = nil
+        let rendered = EditRenderer.apply(base, to: master)
+        // Same small grid for both; quantiles don't need more.
+        let w = 160, h = max(1, Int((160 * Double(preview.height) / Double(preview.width)).rounded()))
+        guard let ours = channels(rendered, w: w, h: h), let theirs = channels(preview, w: w, h: h) else { return nil }
+        var curve = ToneCurves()
+        for c in 0..<3 {
+            let pts = quantileCurve(ours[c].sorted(), theirs[c].sorted())
+            switch c {
+            case 0: curve.red = pts
+            case 1: curve.green = pts
+            default: curve.blue = pts
             }
         }
+        var out = edits
+        out.apertureMatch = curve.isIdentity ? nil : curve
         return out
     }
 
-    private static func clamp(_ v: Double, _ limit: Double) -> Double {
-        min(limit, max(-limit, v))
+    /// Points (our value at quantile q → theirs at q), monotone, with the
+    /// ends pinned to x = 0 and x = 1 so a lifted or lowered black/white end
+    /// carries over.
+    private static func quantileCurve(_ ours: [Double], _ theirs: [Double]) -> [CurvePoint] {
+        var pts: [CurvePoint] = []
+        let n = ours.count
+        for q in quantiles {
+            let i = min(n - 1, Int((q * Double(n - 1)).rounded()))
+            let x = q == 0 ? 0 : (q == 1 ? 1 : ours[i])
+            let y = max(pts.last?.y ?? 0, theirs[i])
+            if let last = pts.last, x <= last.x + 0.01 { continue }
+            pts.append(CurvePoint(x: x, y: min(1, max(0, y))))
+        }
+        return pts
     }
 
-    private static func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
-        0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    /// sRGB-encoded R, G, B samples on a w×h grid.
+    private static func channels(_ cg: CGImage, w: Int, h: Int) -> [[Double]]? {
+        let ci = CIImage(cgImage: cg)
+        guard ci.extent.width > 0, ci.extent.height > 0 else { return nil }
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: CGFloat(w) / ci.extent.width,
+                                                          y: CGFloat(h) / ci.extent.height))
+        let px: [Float] = EditRenderer.withRenderStack {
+            var out = [Float](repeating: 0, count: w * h * 4)
+            context.render(scaled, toBitmap: &out, rowBytes: w * 16,
+                           bounds: CGRect(x: 0, y: 0, width: w, height: h),
+                           format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+            return out
+        }
+        return (0..<3).map { c in (0..<(w * h)).map { Double(min(1, max(0, px[$0 * 4 + c]))) } }
     }
 
     static func decode(_ url: URL, maxPixel: Int) -> CGImage? {

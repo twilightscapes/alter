@@ -38,16 +38,22 @@ extension EditRenderer {
 
         // Black point, brightness, contrast, mid contrast, levels, curves —
         // composed into one table per channel.
-        if edits.levels != nil || edits.curves != nil || edits.contrast != 1
+        if let levels = edits.levels, levels.luminance == true, !levels.rgb.isIdentity {
+            image = applyLuminanceLevels(levels.rgb, to: image)
+        }
+        if edits.levels != nil || edits.curves != nil || edits.moreCurves != nil || edits.contrast != 1
             || edits.blackPoint != nil || edits.brightness != nil || edits.midContrast != nil {
             image = applyLookup(edits, to: image)
         }
 
         if let definition = edits.definition, definition > 0 {
-            // Local contrast: a wide unsharp mask at modest strength.
+            // Local contrast: a wide, gentle unsharp mask. Aperture's
+            // Definition is subtle; at 0.6× this read as gritty and pushed
+            // photos away from Aperture's renders (fitted: a quarter of
+            // that is as close as a wide mask gets).
             image = image.applyingFilter("CIUnsharpMask", parameters: [
                 kCIInputRadiusKey: min(120, max(8, longSide * 0.02)),
-                kCIInputIntensityKey: definition * 0.6,
+                kCIInputIntensityKey: definition * 0.15,
             ]).cropped(to: extent)
         }
 
@@ -79,7 +85,8 @@ extension EditRenderer {
             let blended = image.applyingFilter("CIMultiplyBlendMode", parameters: [
                 kCIInputBackgroundImageKey: image,
             ])
-            image = mix(image, blended, amount: amount)
+            // A full self-multiply darkened far past Aperture's Polarize.
+            image = mix(image, blended, amount: amount * 0.35)
         }
         if let amount = edits.intensifyContrast, amount > 0 {
             let blended = image.applyingFilter("CIOverlayBlendMode", parameters: [
@@ -96,9 +103,10 @@ extension EditRenderer {
         }
 
         if let edge = edits.edgeSharpen, edge > 0 {
+            // 0.6× (was 1.2×): matched to the fine detail in Aperture's renders.
             image = image.applyingFilter("CIUnsharpMask", parameters: [
                 kCIInputRadiusKey: 1.6,
-                kCIInputIntensityKey: edge * 1.2,
+                kCIInputIntensityKey: edge * 0.6,
             ]).cropped(to: extent)
         }
         return image.cropped(to: extent)
@@ -110,33 +118,32 @@ extension EditRenderer {
     /// smaller than green; scale them back about the centre and recombine.
     private static func correctChromaticAberration(_ image: CIImage, redCyan: Double, blueYellow: Double) -> CIImage {
         let e = image.extent
+        // One colour channel, the others zero, fully opaque. (Each channel
+        // used to carry alpha 0, so the recombined photo came out black.)
         func channel(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CIImage {
             image.applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: r, y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: g, z: 0, w: 0),
                 "inputBVector": CIVector(x: 0, y: 0, z: b, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: r + g + b > 1.5 ? 1 : 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1),
             ])
         }
+        // Clamped first, so a channel scaled down still reaches the edges.
         func scaled(_ img: CIImage, _ amount: Double) -> CIImage {
             let s = 1 + CGFloat(amount) * 0.004
             let t = CGAffineTransform(translationX: e.midX, y: e.midY)
                 .scaledBy(x: s, y: s)
                 .translatedBy(x: -e.midX, y: -e.midY)
-            return img.transformed(by: t).cropped(to: e)
+            return img.clampedToExtent().transformed(by: t).cropped(to: e)
         }
         let green = channel(0, 1, 0)
         let red = scaled(channel(1, 0, 0), redCyan)
         let blue = scaled(channel(0, 0, 1), blueYellow)
-        let alpha = image.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-        ])
-        return red.applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: green])
-            .applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: blue])
-            .applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey: alpha])
+        // Each image holds one channel and zeros elsewhere, so a
+        // per-component maximum puts the three back together exactly.
+        return red.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: green])
+            .applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: blue])
             .cropped(to: e)
     }
 
@@ -181,11 +188,20 @@ extension EditRenderer {
         // Brightness: a gamma lift/drop that leaves black and white put.
         let gamma = pow(2.0, -(edits.brightness ?? 0))
         // Mid contrast: ease toward a smoothstep S (or away from it).
-        let mid = min(1, max(-1, edits.midContrast ?? 0))
-        let rgbLevels = levels?.rgb
+        // A quarter strength: the smoothstep S was far stronger than
+        // Aperture's Mid Contrast at the same number (fitted).
+        let mid = min(1, max(-1, edits.midContrast ?? 0)) * 0.25
+        // In Luminance mode the main levels already ran on brightness alone.
+        let rgbLevels = levels?.luminance == true ? nil : levels?.rgb
         let chanLevels = [levels?.red, levels?.green, levels?.blue]
-        let rgbCurve = curves.map { monotoneCurve($0.rgb) }
-        let chanCurves = [curves?.red, curves?.green, curves?.blue].map { $0.map(monotoneCurve) }
+        // Every Curves adjustment, in order: its RGB curve, its channel
+        // curves, and whether it works in linear light.
+        let stages: [(rgb: (Double) -> Double, chan: [((Double) -> Double)?], linear: Bool)] =
+            ([curves].compactMap { $0 } + (edits.moreCurves ?? [])).map { c in
+                (monotoneCurve(c.rgb),
+                 [c.red, c.green, c.blue].map { $0.isEmpty ? nil : monotoneCurve($0) },
+                 c.isLinear)
+            }
         for i in 0..<lutSize {
             let x = Double(i) / Double(lutSize - 1)
             for ch in 0..<3 {
@@ -199,8 +215,13 @@ extension EditRenderer {
                 }
                 if let l = rgbLevels { v = applyLevels(l, v) }
                 if let l = chanLevels[ch] { v = applyLevels(l, v) }
-                if let f = rgbCurve { v = f(v) }
-                if let f = chanCurves[ch] { v = f(v) }
+                for stage in stages {
+                    if stage.linear { v = srgbToLinear(v) }
+                    v = stage.rgb(v)
+                    if let f = stage.chan[ch] { v = f(v) }
+                    if stage.linear { v = linearToSRGB(v) }
+                    v = min(1, max(0, v))
+                }
                 table[i * 3 + ch] = Float(min(1, max(0, v)))
             }
         }
@@ -210,6 +231,73 @@ extension EditRenderer {
             "inputCurvesDomain": CIVector(x: 0, y: 1),
             "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!,
         ])
+    }
+
+    /// One Curves set on its own (the Aperture match), as a lookup table.
+    static func applyCurveStage(_ c: ToneCurves, to image: CIImage) -> CIImage {
+        let rgb = monotoneCurve(c.rgb)
+        let chan = [c.red, c.green, c.blue].map { $0.isEmpty ? nil : monotoneCurve($0) }
+        var table = [Float](repeating: 0, count: lutSize * 3)
+        for i in 0..<lutSize {
+            let x = Double(i) / Double(lutSize - 1)
+            for ch in 0..<3 {
+                var v = c.isLinear ? srgbToLinear(x) : x
+                v = rgb(v)
+                if let f = chan[ch] { v = f(v) }
+                if c.isLinear { v = linearToSRGB(v) }
+                table[i * 3 + ch] = Float(min(1, max(0, v)))
+            }
+        }
+        let data = table.withUnsafeBufferPointer { Data(buffer: $0) }
+        return image.applyingFilter("CIColorCurves", parameters: [
+            "inputCurvesData": data,
+            "inputCurvesDomain": CIVector(x: 0, y: 1),
+            "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!,
+        ])
+    }
+
+    /// Levels on brightness only (Aperture's Luminance mode): map the
+    /// photo's luminance through the levels, then scale each pixel's R, G
+    /// and B by new/old luminance, so hue and saturation stay put.
+    private static func applyLuminanceLevels(_ l: LevelsChannel, to image: CIImage) -> CIImage {
+        let e = image.extent
+        let w = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+        let luma = image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": w, "inputGVector": w, "inputBVector": w,
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+        ])
+        var table = [Float](repeating: 0, count: lutSize * 3)
+        for i in 0..<lutSize {
+            let v = Float(min(1, max(0, applyLevels(l, Double(i) / Double(lutSize - 1)))))
+            table[i * 3] = v; table[i * 3 + 1] = v; table[i * 3 + 2] = v
+        }
+        let data = table.withUnsafeBufferPointer { Data(buffer: $0) }
+        let mapped = luma.applyingFilter("CIColorCurves", parameters: [
+            "inputCurvesData": data,
+            "inputCurvesDomain": CIVector(x: 0, y: 1),
+            "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!,
+        ])
+        // ratio = mapped / luma. CIDivideBlendMode computes background ÷
+        // source and clamps at 1 (measured), so divide a quarter of the
+        // mapped luminance and multiply the result back up by 4 — ratios up
+        // to 4× survive. A hair is added to luma so black stays black.
+        func scale(_ img: CIImage, _ k: CGFloat) -> CIImage {
+            img.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: k, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: k, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0),
+            ])
+        }
+        let safeLuma = luma.applyingFilter("CIColorMatrix", parameters: [
+            "inputBiasVector": CIVector(x: 1e-4, y: 1e-4, z: 1e-4, w: 0),
+        ])
+        let quarterRatio = safeLuma.applyingFilter("CIDivideBlendMode", parameters: [
+            kCIInputBackgroundImageKey: scale(mapped, 0.25),
+        ])
+        let multiplied = image.applyingFilter("CIMultiplyCompositing", parameters: [
+            kCIInputBackgroundImageKey: quarterRatio,
+        ])
+        return scale(multiplied, 4).cropped(to: e)
     }
 
     /// Five source points → five destinations, piecewise linear.
@@ -225,10 +313,23 @@ extension EditRenderer {
         return dst[4]
     }
 
-    /// Monotone cubic (Fritsch–Carlson) through the control points with
-    /// implied (0,0) and (1,1) endpoints — no overshoot, like Aperture.
+    private static func srgbToLinear(_ v: Double) -> Double {
+        v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+    }
+    private static func linearToSRGB(_ v: Double) -> Double {
+        let x = max(0, v)
+        return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1 / 2.4) - 0.055
+    }
+
+    /// Monotone cubic (Fritsch–Carlson) through the control points — no
+    /// overshoot, like Aperture. The ends are (0,0) and (1,1) unless the
+    /// points carry their own: one at x = 0 is a moved black end, and a
+    /// last one at x ≥ 1 a moved white end.
     static func monotoneCurve(_ points: [CurvePoint]) -> (Double) -> Double {
-        var pts = [CurvePoint(x: 0, y: 0)] + points.sorted { $0.x < $1.x } + [CurvePoint(x: 1, y: 1)]
+        let sorted = points.sorted { $0.x < $1.x }
+        var pts = sorted
+        if (sorted.first?.x ?? 1) > 0.0001 { pts.insert(CurvePoint(x: 0, y: 0), at: 0) }
+        if (sorted.last?.x ?? 0) < 0.9999 { pts.append(CurvePoint(x: 1, y: 1)) }
         // Drop duplicates in x.
         pts = pts.enumerated().filter { i, p in i == 0 || p.x > pts[i - 1].x + 1e-6 }.map(\.element)
         let n = pts.count

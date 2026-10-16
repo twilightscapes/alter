@@ -295,9 +295,15 @@ struct CurvesEditor: View {
                             removing = drag.location.y < -24 || drag.location.y > side + 24
                                 || drag.location.x < -24 || drag.location.x > side + 24
                             var pts = points.wrappedValue
-                            let lo = index > 0 ? pts[index - 1].x + 0.01 : 0.005
-                            let hi = index < pts.count - 1 ? pts[index + 1].x - 0.01 : 0.995
-                            pts[index].x = min(max(Double(drag.location.x / side), lo), hi)
+                            // An end point (imported from Aperture: a lifted
+                            // black or moved white) slides up and down only;
+                            // moving it inward would turn it into a mid point.
+                            let isEnd = pts[index].x <= 0.0001 || pts[index].x >= 0.9999
+                            if !isEnd {
+                                let lo = index > 0 ? pts[index - 1].x + 0.01 : 0.005
+                                let hi = index < pts.count - 1 ? pts[index + 1].x - 0.01 : 0.995
+                                pts[index].x = min(max(Double(drag.location.x / side), lo), hi)
+                            }
                             pts[index].y = min(max(1 - Double(drag.location.y / side), 0), 1)
                             points.wrappedValue = pts
                         }

@@ -120,6 +120,15 @@ struct GridView: View {
                         withAnimation { proxy.scrollTo(id, anchor: .center) }
                         store.revealID = nil
                     }
+                    // The grid is rebuilt each time you come back from the
+                    // viewer, which used to drop you at the top of the
+                    // library. Land on the photo you were looking at instead
+                    // (as Aperture did) — including one you stepped to in the
+                    // viewer. A tick later, once the lazy grid has laid out.
+                    .onAppear {
+                        guard let id = store.viewerPhotoID ?? store.selection.first else { return }
+                        DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
+                    }
                 }
                 .background(Color(nsColor: .underPageBackgroundColor))
                 .alert("New Album", isPresented: $isNamingAlbum) {
