@@ -52,6 +52,17 @@ struct RetouchSpot: Codable, Equatable, Hashable {
     var softness: Double? = nil
     var opacity: Double? = nil
     var clone: Bool? = nil
+    /// A dragged stroke: the rest of its path after (x, y), normalized.
+    var trail: [RetouchPoint]? = nil
+    /// Repair by content-aware fill: rebuilt from patches around it, no
+    /// single source (dx/dy unused). `variant` picks another fill.
+    var fill: Bool? = nil
+    var variant: Int? = nil
+}
+
+struct RetouchPoint: Codable, Equatable, Hashable {
+    var x: Double
+    var y: Double
 }
 
 /// Aperture's Red Eye: a circle where red pupils lose their red.
@@ -379,8 +390,11 @@ struct PhotoEdits: Codable, Equatable {
                    sharpness, highlightsValue, shadowsValue]
             .map { String(format: "%.3f", $0) }.joined(separator: ",")
         for spot in retouchSpots {
-            key += String(format: "|r%.4f,%.4f,%.4f,%.3f,%.3f,%.2f,%.2f", spot.x, spot.y, spot.radius, spot.dx, spot.dy,
+            key += String(format: "|r%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f", spot.x, spot.y, spot.radius, spot.dx, spot.dy,
                           spot.softness ?? 0.45, spot.opacity ?? 1)
+            if spot.clone == true { key += "c" }
+            if spot.fill == true { key += "f\(spot.variant ?? 0)" }
+            for p in spot.trail ?? [] { key += String(format: "~%.4f,%.4f", p.x, p.y) }
         }
         for eye in redEyes ?? [] {
             key += String(format: "|e%.4f,%.4f,%.4f", eye.x, eye.y, eye.radius)

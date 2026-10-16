@@ -32,13 +32,8 @@ struct ViewerView: View {
     @State private var imagePath: String?
     @State private var loadFailed = false
     @State private var retouchMode = false
-    @State private var retouchRadius = 0.02 // fraction of image width
-    // Aperture's Retouch HUD.
-    @State private var retouchClone = false
-    @State private var retouchSoftness = 0.45
-    @State private var retouchOpacity = 1.0
-    /// Clone mode: the source point (normalized), set with ⌥-click.
-    @State private var cloneSource: CGPoint?
+    /// The Retouch tool (X): brush, spots, selection — see RetouchTool.
+    @StateObject private var retouch = RetouchTool()
     // Red Eye (E).
     @State private var redEyeMode = false
     @State private var redEyeRadius = 0.012
@@ -204,6 +199,7 @@ struct ViewerView: View {
             onResult: handlePlaygroundResult))
         .onChange(of: store.viewerPhotoID) { _ in
             retouchMode = false
+            retouch.reset()
             cropMode = false
             cropDragRect = nil
             brushMode = false
@@ -217,6 +213,15 @@ struct ViewerView: View {
             // per-photo, so drop it and let the task rebuild.
             loupeFullImage = nil
             loupeRenderKey = ""
+        }
+        .onChange(of: retouchMode) { on in
+            retouch.reset()
+            if on { loupeMode = false; compareMode = false }
+        }
+        .task(id: retouchMode ? "\(item?.id ?? 0)#\(item?.edits.appliesFileOrientation ?? true)" : "") {
+            // Repair searches the photo for sources: decode it once per photo.
+            guard retouchMode, let item, !item.isVideo else { return }
+            await retouch.loadBase(url: item.url, edits: item.edits)
         }
         .onChange(of: loupeMode) { on in
             if on || isZoomed { installLoupeScrollMonitor() } else { removeLoupeScrollMonitor() }
@@ -298,6 +303,7 @@ struct ViewerView: View {
         }
         .task(id: renderKey) {
             guard let item else { return }
+            let key = renderKey
             let url = item.url
             try? await FileLocality.ensureLocal(url)
             if item.isVideo {
@@ -347,8 +353,11 @@ struct ViewerView: View {
                     return orientation >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
                 }.value
             }
-            // A stale task racing a photo switch must not clobber the state.
-            guard imagePath == url.path else { return }
+            // A stale task must not clobber the state: not after a photo
+            // switch, and not after the recipe moved on — a slow render (a
+            // big Retouch fill) finishing after a newer one would put old
+            // pixels back on screen.
+            guard imagePath == url.path, renderKey == key, !Task.isCancelled else { return }
             image = loaded
             loadFailed = loaded == nil
         }
@@ -545,16 +554,9 @@ struct ViewerView: View {
                             .onAppear { containerSize = geo.size }
                             .onChange(of: geo.size) { containerSize = $0 }
                         if retouchMode, let item {
-                            retouchMarkers(for: item, fit: fit)
-                            if retouchClone, let source = cloneSource {
-                                let d = max(6, retouchRadius * fit.width * 2)
-                                Circle()
-                                    .strokeBorder(Color.green.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-                                    .frame(width: d, height: d)
-                                    .offset(x: fit.minX + source.x * fit.width - d / 2,
-                                            y: fit.minY + source.y * fit.height - d / 2)
-                                    .allowsHitTesting(false)
-                            }
+                            RetouchOverlay(tool: retouch, fit: fit,
+                                           edits: store.editsBinding(for: item.id), undo: undoManager)
+                                .frame(width: geo.size.width, height: geo.size.height)
                         }
                         if redEyeMode, let item {
                             redEyeMarkers(for: item, fit: fit)
@@ -593,7 +595,6 @@ struct ViewerView: View {
                         if isZoomed { viewerZoom = nil } else { store.exitViewer() }
                     }
                     .onTapGesture(count: 1, coordinateSpace: .local) { location in
-                        if retouchMode { addSpot(at: location, fit: fit) }
                         if redEyeMode { addRedEye(at: location, fit: fit) }
                         if let kind = store.pickRequest { performPick(kind, at: location, fit: fit) }
                     }
@@ -784,8 +785,10 @@ struct ViewerView: View {
 
     private var controlTray: some View {
         HStack(spacing: 12) {
-            if retouchMode {
-                retouchControls
+            if retouchMode, let item {
+                RetouchControls(tool: retouch, edits: store.editsBinding(for: item.id), undo: undoManager) {
+                    retouchMode = false
+                }
             } else if cropMode {
                 cropControls
             } else if redEyeMode {
@@ -1050,54 +1053,6 @@ struct ViewerView: View {
             Button("Done") { exitBrushMode() }
                 .keyboardShortcut(.defaultAction)
                 .help("Leave Brush mode (Esc)")
-        }
-    }
-
-    /// Aperture's Retouch HUD: Repair (source chosen for you) or Clone
-    /// (⌥-click a source, then click), radius, softness, opacity.
-    private var retouchControls: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bandage")
-                .foregroundColor(.accentColor)
-            Picker("", selection: $retouchClone) {
-                Text("Repair").tag(false)
-                Text("Clone").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 120)
-            .help("Repair picks a source beside the spot. Clone copies from a source you ⌥-click.")
-            .accessibilityLabel("Retouch mode")
-            Text(retouchClone
-                 ? (cloneSource == nil ? "⌥-click a source, then click to clone" : "Click to clone from the source")
-                 : "Click a spot to heal it")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-            HStack(spacing: 4) {
-                Text("Radius").font(.caption).foregroundColor(.secondary)
-                Slider(value: $retouchRadius, in: 0.005...0.08)
-                    .frame(width: 80)
-                    .accessibilityLabel("Retouch radius")
-            }
-            HStack(spacing: 4) {
-                Text("Softness").font(.caption).foregroundColor(.secondary)
-                Slider(value: $retouchSoftness, in: 0...1)
-                    .frame(width: 70)
-                    .accessibilityLabel("Retouch softness")
-            }
-            HStack(spacing: 4) {
-                Text("Opacity").font(.caption).foregroundColor(.secondary)
-                Slider(value: $retouchOpacity, in: 0.1...1)
-                    .frame(width: 70)
-                    .accessibilityLabel("Retouch opacity")
-            }
-            Button("Undo") { removeLastSpot() }
-                .disabled((item?.edits.retouchSpots.isEmpty) ?? true)
-            Button("Clear All") { clearSpots() }
-                .disabled((item?.edits.retouchSpots.isEmpty) ?? true)
-            Spacer()
-            Button("Done") { retouchMode = false; cloneSource = nil }
-                .keyboardShortcut(.defaultAction)
         }
     }
 
@@ -1863,19 +1818,6 @@ struct ViewerView: View {
 
     // MARK: - Retouch
 
-    /// Ring markers over the healed spots while retouching.
-    private func retouchMarkers(for item: PhotoItem, fit: CGRect) -> some View {
-        ForEach(Array(item.edits.retouchSpots.enumerated()), id: \.element) { _, spot in
-            let diameter = max(6, spot.radius * fit.width * 2)
-            Circle()
-                .strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1.5)
-                .frame(width: diameter, height: diameter)
-                .offset(x: fit.minX + spot.x * fit.width - diameter / 2,
-                        y: fit.minY + spot.y * fit.height - diameter / 2)
-                .allowsHitTesting(false)
-        }
-    }
-
     /// The image's letterboxed rect inside the container (scaledToFit).
     private func fitRect(imageSize: NSSize, in container: CGSize) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0,
@@ -1885,59 +1827,6 @@ struct ViewerView: View {
         return CGRect(x: (container.width - size.width) / 2,
                       y: (container.height - size.height) / 2,
                       width: size.width, height: size.height)
-    }
-
-    private func addSpot(at location: CGPoint, fit: CGRect) {
-        guard let item, fit.width > 0 else { return }
-        let nx = (location.x - fit.minX) / fit.width
-        let ny = (location.y - fit.minY) / fit.height
-        guard (0...1).contains(nx), (0...1).contains(ny) else { return }
-
-        // ⌥-click in Clone mode sets the source instead of painting.
-        if retouchClone, NSApp.currentEvent?.modifierFlags.contains(.option) == true {
-            cloneSource = CGPoint(x: nx, y: ny)
-            return
-        }
-        var dx: Double
-        var dy = 0.0
-        if retouchClone, let source = cloneSource {
-            dx = source.x - nx
-            dy = source.y - ny
-        } else {
-            // Repair: clone from beside the spot — away from the nearer edge
-            // so the source stays inside the frame.
-            let offset = retouchRadius * 2.4
-            dx = nx < 0.5 ? offset : -offset
-            if nx + dx < retouchRadius || nx + dx > 1 - retouchRadius { dx = -dx }
-        }
-
-        let spot = RetouchSpot(x: nx, y: ny, radius: retouchRadius, dx: dx, dy: dy,
-                               softness: abs(retouchSoftness - 0.45) < 0.01 ? nil : retouchSoftness,
-                               opacity: retouchOpacity > 0.995 ? nil : retouchOpacity,
-                               clone: retouchClone ? true : nil)
-        let binding = store.editsBinding(for: item.id)
-        var edits = binding.wrappedValue
-        edits.retouches = edits.retouchSpots + [spot]
-        binding.wrappedValue = edits
-    }
-
-    private func removeLastSpot() {
-        guard let item else { return }
-        let binding = store.editsBinding(for: item.id)
-        var edits = binding.wrappedValue
-        var spots = edits.retouchSpots
-        guard !spots.isEmpty else { return }
-        spots.removeLast()
-        edits.retouches = spots.isEmpty ? nil : spots
-        binding.wrappedValue = edits
-    }
-
-    private func clearSpots() {
-        guard let item else { return }
-        let binding = store.editsBinding(for: item.id)
-        var edits = binding.wrappedValue
-        edits.retouches = nil
-        binding.wrappedValue = edits
     }
 
     // MARK: - Crop / straighten / rotate
@@ -2382,9 +2271,10 @@ struct ViewerView: View {
     private var hiddenShortcuts: some View {
         Group {
             Button("") {
-                if retouchMode {
+                if retouchMode, retouch.selection != nil {
+                    retouch.selection = nil
+                } else if retouchMode {
                     retouchMode = false
-                    cloneSource = nil
                 } else if redEyeMode {
                     redEyeMode = false
                 } else if cropMode {

@@ -102,6 +102,11 @@ final class ImageLoader {
         isImageFile(url) || isVideoFile(url)
     }
 
+    /// The decoded photo with no recipe applied — what Retouch heals from.
+    func decodedBase(for url: URL, appliesOrientation: Bool, maxPixel: Int) -> CGImage? {
+        cgThumbnail(url: url, maxPixel: maxPixel, applyOrientation: appliesOrientation)
+    }
+
     private func cgThumbnail(url: URL, maxPixel: Int, applyOrientation: Bool = true) -> CGImage? {
         if Self.isVideoFile(url) {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
