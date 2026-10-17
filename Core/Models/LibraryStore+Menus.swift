@@ -67,6 +67,57 @@ extension LibraryStore {
         statusMessage = "Split the stack in two."
     }
 
+    /// Every member in order, the ones on show as they're shown and any a
+    /// search or filter hides after them — for writing a stack's order.
+    func fullStackOrder(_ stackID: Int64) -> [Int64] {
+        let shown = stackMembers(stackID)
+        let all = (try? catalog?.stackMemberIDs(stackID: stackID)) ?? []
+        return shown + all.filter { !shown.contains($0) }
+    }
+
+    /// A stack's members in order: the pick, then by position, then as sorted.
+    func stackMembers(_ stackID: Int64) -> [Int64] {
+        let pick = stackInfo[stackID]?.pick
+        let shown = items.filter { $0.stackID == stackID && !$0.isVersion }
+        let order = Dictionary(uniqueKeysWithValues: shown.enumerated().map { ($1.id, $0) })
+        return shown.map(\.id).sorted { a, b in
+            if a == pick { return true }
+            if b == pick { return false }
+            let pa = stackPositions[a] ?? 0, pb = stackPositions[b] ?? 0
+            return pa != pb ? pa < pb : (order[a] ?? 0) < (order[b] ?? 0)
+        }
+    }
+
+    /// Stack members together, in stack order, where the first of them falls.
+    func orderStacks() {
+        guard items.contains(where: { $0.stackID != nil }) else { return }
+        var placed = Set<Int64>()
+        var out: [PhotoItem] = []
+        out.reserveCapacity(items.count)
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for item in items {
+            guard let stackID = item.stackID, !item.isVersion else { out.append(item); continue }
+            guard placed.insert(stackID).inserted else { continue }
+            out += stackMembers(stackID).compactMap { byID[$0] }
+        }
+        items = out
+    }
+
+    /// Aperture's Promote (⌘[) / Demote (⌘]): one place earlier or later in
+    /// its stack. Promoted to the front, it's the pick.
+    func moveInStack(_ id: Int64, by delta: Int) {
+        guard let catalog, let stackID = item(id)?.stackID else { return }
+        var members = fullStackOrder(stackID)
+        guard let index = members.firstIndex(of: id) else { return }
+        let target = index + delta
+        guard members.indices.contains(target) else { return }
+        members.swapAt(index, target)
+        try? catalog.setStackOrder(stackID: stackID, photoIDs: members)
+        reloadSidebar()
+        reloadItems()
+        selection = [id]
+    }
+
     /// After members leave: dissolve stacks of one, re-pick orphaned picks.
     private func tidyStacks(_ stackIDs: Set<Int64>) {
         guard let catalog else { return }

@@ -81,6 +81,8 @@ enum LibrarySource: Hashable {
     case project(Int64)
     /// Aperture's Faces corkboard (its own pane, no grid).
     case faces
+    /// Aperture's Places: the whole library on a map.
+    case places
     /// One person's photos.
     case person(Int64)
 }
@@ -383,6 +385,38 @@ final class Catalog {
             try db.run("UPDATE schema_info SET version = 11")
         }
 
+        // v12: where each photo was taken, in the catalog — so Places can
+        // map a whole library at once, and so a photo in an Aperture
+        // library (whose file Alter never writes) can still be placed.
+        // gps_read = the file's own GPS has been looked for.
+        if version < 12 {
+            try? db.execute("ALTER TABLE photos ADD COLUMN latitude REAL")
+            try? db.execute("ALTER TABLE photos ADD COLUMN longitude REAL")
+            try? db.execute("ALTER TABLE photos ADD COLUMN gps_read INTEGER NOT NULL DEFAULT 0")
+            try db.run("UPDATE schema_info SET version = 12")
+        }
+
+        // v13: place names ("Fort Worth, Texas, United States") for where
+        // photos were taken. Looked up once per ~1 km cell (the key is the
+        // location rounded to 0.01°) and shared by every photo in it.
+        if version < 13 {
+            try db.execute("""
+            CREATE TABLE IF NOT EXISTS place_names (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                looked_up REAL NOT NULL
+            );
+            """)
+            try? db.execute("ALTER TABLE photos ADD COLUMN place TEXT NOT NULL DEFAULT ''")
+            try db.run("UPDATE schema_info SET version = 13")
+        }
+
+        // v14: the order inside a stack (Promote/Demote); its first is the pick.
+        if version < 14 {
+            try? db.execute("ALTER TABLE photos ADD COLUMN stack_position INTEGER NOT NULL DEFAULT 0")
+            try db.run("UPDATE schema_info SET version = 14")
+        }
+
         // Repair: an early v5 uniqueness index was (path, version_of),
         // which allowed only ONE version per master. Swap it for the
         // masters-only partial index. Idempotent and cheap on every open.
@@ -598,6 +632,8 @@ final class Catalog {
             rows = try db.query(base + " AND p.project_id IN (\(marks))" + order, ids.map { $0 as Any? })
         case .faces:
             rows = []
+        case .places:
+            rows = try db.query(base + order)
         case .person(let id):
             rows = try db.query(base + " AND p.id IN (SELECT photo_id FROM faces WHERE person_id = ?)" + order, [id])
         case .album(let id):
@@ -818,9 +854,11 @@ final class Catalog {
         guard let first = photoIDs.first else { throw NSError(domain: "Alter", code: 1) }
         try db.run("INSERT INTO stacks (pick_photo_id, collapsed) VALUES (?, 1)", [pick ?? first])
         let stackID = db.lastInsertRowID
-        for id in photoIDs {
-            try db.run("UPDATE photos SET stack_id = ? WHERE id = ? OR version_of = ?",
-                       [stackID, id, id])
+        // The pick first, the rest in the order given.
+        let ordered = pick.map { p in [p] + photoIDs.filter { $0 != p } } ?? photoIDs
+        for (position, id) in ordered.enumerated() {
+            try db.run("UPDATE photos SET stack_id = ?, stack_position = ? WHERE id = ? OR version_of = ?",
+                       [stackID, position, id, id])
         }
         return stackID
     }
@@ -837,6 +875,32 @@ final class Catalog {
 
     func setStackPick(stackID: Int64, photoID: Int64) throws {
         try db.run("UPDATE stacks SET pick_photo_id = ? WHERE id = ?", [photoID, stackID])
+    }
+
+    /// Every stacked master's place in its stack.
+    func stackPositions() throws -> [Int64: Int] {
+        var out: [Int64: Int] = [:]
+        for row in try db.query("SELECT id, stack_position FROM photos WHERE stack_id IS NOT NULL AND version_of IS NULL") {
+            if let id = row["id"] as? Int64 { out[id] = Int(row["stack_position"] as? Int64 ?? 0) }
+        }
+        return out
+    }
+
+    /// A stack's masters, pick first, then by position.
+    func stackMemberIDs(stackID: Int64) throws -> [Int64] {
+        try db.query("""
+            SELECT p.id FROM photos p JOIN stacks s ON s.id = p.stack_id
+            WHERE p.stack_id = ? AND p.version_of IS NULL
+            ORDER BY (p.id = s.pick_photo_id) DESC, p.stack_position, p.filename COLLATE NOCASE
+            """, [stackID]).compactMap { $0["id"] as? Int64 }
+    }
+
+    /// A stack in this order; the first becomes its pick.
+    func setStackOrder(stackID: Int64, photoIDs: [Int64]) throws {
+        for (position, id) in photoIDs.enumerated() {
+            try db.run("UPDATE photos SET stack_position = ? WHERE id = ? OR version_of = ?", [position, id, id])
+        }
+        if let first = photoIDs.first { try setStackPick(stackID: stackID, photoID: first) }
     }
 
     func setStackCollapsed(stackID: Int64, collapsed: Bool) throws {

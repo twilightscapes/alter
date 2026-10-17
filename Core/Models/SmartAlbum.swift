@@ -59,7 +59,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
 
     enum Field: String, Codable, CaseIterable, Identifiable {
         case rating, flagged, label, keyword, text, kind, hasAlt, adjusted, filename, date, fileType,
-             camera, lens, iso, focalLength, person
+             camera, lens, iso, focalLength, person, location
         var id: String { rawValue }
 
         var label: String {
@@ -71,6 +71,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .iso: return "ISO"
             case .focalLength: return "Focal Length (mm)"
             case .person: return "Person"
+            case .location: return "Location"
             case .rating: return "Rating"
             case .flagged: return "Flagged"
             case .label: return "Color Label"
@@ -94,6 +95,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .date, .iso, .focalLength: return [.atLeast, .atMost]
             case .camera, .lens: return [.contains, .notContains]
             case .person: return [.is, .isNot, .contains, .notContains]
+            case .location: return [.is, .near, .contains, .notContains]
             }
         }
 
@@ -102,6 +104,8 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             switch self {
             case .flagged, .hasAlt, .adjusted:
                 return [("yes", "Yes"), ("no", "No")]
+            case .location:
+                return [("yes", "Set"), ("no", "Not Set")]
             case .kind:
                 return [("photo", "Photo"), ("video", "Video"), ("gif", "Animated GIF")]
             case .label:
@@ -118,7 +122,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
     }
 
     enum Op: String, Codable, CaseIterable, Identifiable {
-        case `is`, isNot, atLeast, atMost, contains, notContains
+        case `is`, isNot, atLeast, atMost, contains, notContains, near
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -128,6 +132,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .atMost: return "is at most"
             case .contains: return "contains"
             case .notContains: return "does not contain"
+            case .near: return "is within"
             }
         }
     }
@@ -171,6 +176,17 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             let want = value.lowercased()
             let same = ext == want || (want == "jpg" && ext == "jpeg") || (want == "tif" && ext == "tiff")
             return op == .isNot ? !same : same
+        case .location:
+            if op == .near {
+                guard let near = NearPlace(value), let lat = item.latitude, let lon = item.longitude else { return false }
+                return near.contains(latitude: lat, longitude: lon)
+            }
+            if op == .contains || op == .notContains {
+                // The place's name: "Texas", "Paris", "Japan"…
+                let hit = item.place.localizedCaseInsensitiveContains(value.trimmingCharacters(in: .whitespaces))
+                return op == .notContains ? !hit : hit
+            }
+            return item.hasLocation == (value == "yes")
         case .person:
             // "is" = that person (by name) is in it; "contains" = any name containing it.
             let want = value.trimmingCharacters(in: .whitespaces)
@@ -200,5 +216,39 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             default: return fileDate >= day
             }
         }
+    }
+}
+
+/// "is within 25 km of Paris": stored in the rule as "km|lat|lon|name",
+/// the place looked up once when it was typed.
+struct NearPlace: Equatable {
+    var kilometres: Double
+    var latitude: Double
+    var longitude: Double
+    var name: String
+
+    init(kilometres: Double, latitude: Double, longitude: Double, name: String) {
+        self.kilometres = kilometres
+        self.latitude = latitude
+        self.longitude = longitude
+        self.name = name
+    }
+
+    init?(_ value: String) {
+        let parts = value.split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4, let km = Double(parts[0]), let lat = Double(parts[1]), let lon = Double(parts[2])
+        else { return nil }
+        self.init(kilometres: km, latitude: lat, longitude: lon, name: parts[3])
+    }
+
+    var encoded: String { "\(kilometres)|\(latitude)|\(longitude)|\(name)" }
+
+    /// Great-circle distance, within the radius.
+    func contains(latitude lat: Double, longitude lon: Double) -> Bool {
+        let r = 6371.0, rad = Double.pi / 180
+        let dLat = (lat - latitude) * rad, dLon = (lon - longitude) * rad
+        let a = sin(dLat / 2) * sin(dLat / 2)
+            + cos(latitude * rad) * cos(lat * rad) * sin(dLon / 2) * sin(dLon / 2)
+        return 2 * r * asin(min(1, sqrt(a))) <= kilometres
     }
 }

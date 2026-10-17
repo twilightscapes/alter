@@ -9,8 +9,8 @@
 //  The menu bar, laid out as Aperture's was: File, Edit, Photos, Stacks,
 //  Metadata, View, Window — Aperture's names, order and keys, read from its
 //  own help. What Alter adds sits after a divider in the menu it belongs
-//  to; what Aperture had and Alter doesn't (Vaults, Books, Light Tables,
-//  Print) is left out rather than shown dead. An extension's commands go
+//  to; what Aperture had and Alter doesn't (Vaults, Books, Light Tables)
+//  is left out rather than shown dead. An extension's commands go
 //  in through AlterExtensions.menuItems.
 //
 //  Single-key commands (ratings, /, ⌃digits, O, H, W…) are handled by
@@ -90,6 +90,8 @@ private struct FileMenu: Commands {
                 // Aperture's Import ▸ Library: another Aperture library into
                 // this one, as its own folder.
                 Button("Aperture Library…") { store.presentImportApertureLibraryPanel() }
+                Button("GPS Track…") { store.presentImportGPSTrackPanel() }
+                    .disabled(!store.isOpen)
                 if let items = slot(.fileImport, store) {
                     Divider()
                     items
@@ -106,10 +108,21 @@ private struct FileMenu: Commands {
                 }
             }
             .disabled(!store.isOpen)
-            if let items = slot(.fileShare, store) {
-                Menu("Share") { items }
-                    .disabled(!store.isOpen)
+            // The Mac's own sharing (Mail, Messages, AirDrop…), then what an
+            // extension publishes to.
+            Menu("Share") {
+                ShareLink(items: store.commandTargets.compactMap { store.item($0) }.map(SharedPhoto.init)) { _ in
+                    SharePreview("Photo")
+                } label: {
+                    Text("Share \(store.commandTargets.count == 1 ? "Photo" : "\(store.commandTargets.count) Photos")")
+                }
+                .disabled(store.commandTargets.isEmpty)
+                if let items = slot(.fileShare, store) {
+                    Divider()
+                    items
+                }
             }
+            .disabled(!store.isOpen)
             // Aperture's File ▸ Tether.
             Menu("Tether") {
                 Button("Start Session…") { store.isImportWindowPresented = true }
@@ -134,6 +147,12 @@ private struct FileMenu: Commands {
         // Saving metadata lives with the metadata (Metadata ▸ Write to
         // Files, still ⌘S); Aperture's File menu had no Save.
         CommandGroup(replacing: .saveItem) {}
+        // Aperture's File ▸ Print (⌘P): the selected photos.
+        CommandGroup(replacing: .printItem) {
+            Button("Print…") { store.isPrintSheetPresented = true }
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled(!store.isOpen || (store.selection.isEmpty && store.viewerPhotoID == nil))
+        }
     }
 }
 
@@ -244,11 +263,10 @@ private struct PhotosMenu: Commands {
             }
             .disabled(store.commandTargets.count != 1 || store.isWorking)
             Divider()
-            Button("Rotate Counterclockwise") { store.rotate(-1, for: store.commandTargets) }
-                .keyboardShortcut("[", modifiers: .command)
+            // Aperture's keys: [ and ] (⌘[ ⌘] are Promote and Demote).
+            Button("Rotate Counterclockwise\t[") { store.rotate(-1, for: store.commandTargets) }
                 .disabled(store.commandTargets.isEmpty)
-            Button("Rotate Clockwise") { store.rotate(1, for: store.commandTargets) }
-                .keyboardShortcut("]", modifiers: .command)
+            Button("Rotate Clockwise\t]") { store.rotate(1, for: store.commandTargets) }
                 .disabled(store.commandTargets.isEmpty)
             Button("Flip Horizontal") { store.flip(horizontal: true, for: store.commandTargets) }
                 .disabled(store.commandTargets.isEmpty)
@@ -302,6 +320,12 @@ private struct StacksMenu: Commands {
             }
             .keyboardShortcut("\\", modifiers: .command)
             .disabled(store.selection.count != 1 || !inStack)
+            Button("Promote") { if let id = store.selection.first { store.moveInStack(id, by: -1) } }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(store.selection.count != 1 || !inStack)
+            Button("Demote") { if let id = store.selection.first { store.moveInStack(id, by: 1) } }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(store.selection.count != 1 || !inStack)
             Button("Split Stack") { store.splitStack() }
                 .disabled(store.selection.count != 1 || !inStack)
             Button("Extract Item") { store.extractFromStack() }
@@ -315,6 +339,7 @@ private struct StacksMenu: Commands {
 
 private struct MetadataMenu: Commands {
     @ObservedObject var store: LibraryStore
+    @ObservedObject var metadataPresets = MetadataPresets.shared
 
     private var targets: [Int64] { store.commandTargets }
 
@@ -382,6 +407,20 @@ private struct MetadataMenu: Commands {
                 .keyboardShortcut("v", modifiers: [.command, .shift])
                 .disabled(store.lifted == nil || targets.isEmpty)
             Divider()
+            // Aperture's metadata presets: several fields at once.
+            Menu("Apply Metadata Preset") {
+                ForEach(metadataPresets.presets) { preset in
+                    Menu(preset.name) {
+                        ForEach(MetadataPreset.Mode.allCases) { mode in
+                            Button(mode.label) { store.applyMetadataPreset(preset, mode: mode, to: targets) }
+                        }
+                    }
+                    .disabled(targets.isEmpty)
+                }
+                if !metadataPresets.presets.isEmpty { Divider() }
+                Button("Edit Metadata Presets…") { store.isMetadataPresetsEditorPresented = true }
+            }
+            .disabled(!store.isOpen)
             Menu("Snippets") {
                 ForEach(store.snippets) { snippet in
                     Button("\(snippet.name) → \(snippet.field.label)") {
@@ -411,6 +450,7 @@ private struct MetadataMenu: Commands {
 
 private struct ViewMenu: Commands {
     @ObservedObject var store: LibraryStore
+    @ObservedObject var secondary = SecondaryViewer.shared
 
     var body: some Commands {
         // Aperture's View comes after Metadata; macOS fixes its own View
@@ -431,6 +471,22 @@ private struct ViewMenu: Commands {
                 Button(store.isFullScreenMode ? "Exit Full Screen\tF" : "Full Screen\tF") {
                     store.toggleFullScreenMode(window: NSApp.keyWindow ?? NSApp.mainWindow)
                 }
+                // Aperture's Secondary Viewer, on the other display.
+                Menu("Secondary Viewer") {
+                    Picker("Secondary Viewer", selection: Binding(get: { secondary.mode }, set: { mode in
+                        secondary.attach(store)
+                        secondary.mode = mode
+                    })) {
+                        ForEach(SecondaryViewer.Mode.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    if !secondary.available {
+                        Divider()
+                        Text("Needs a second display")
+                    }
+                }
+                .disabled(!secondary.available)
             }
             .disabled(!store.isOpen)
             Divider()
@@ -475,6 +531,7 @@ private struct WindowMenu: Commands {
                 ForEach(AlterExtensions.shared.inspectorTabs) { spec in
                     Button("\(spec.title) Inspector") { store.inspectorTab = .ext(spec.id) }
                 }
+                Toggle("Inspector\tI", isOn: $store.isInspectorShown)
                 Button("Next Inspector Tab\tW") { store.cycleInspectorTab() }
                 Divider()
                 Button("Inspector HUD\tH") { store.isInspectorHUDVisible.toggle() }

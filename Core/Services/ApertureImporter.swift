@@ -199,6 +199,11 @@ enum ApertureImporter {
                 if cameraInfo[working.modelId] != nil || camera.captureDate != nil {
                     try catalog.setCameraInfo(photoID: masterID, camera)
                 }
+                // Where Aperture had it (assigned there or from the camera).
+                if let placed = family.first(where: { ($0.latitude ?? 0) != 0 || ($0.longitude ?? 0) != 0 }),
+                   let lat = placed.latitude, let lon = placed.longitude {
+                    try catalog.setLocation(photoIDs: [masterID], latitude: lat, longitude: lon)
+                }
                 try apply(working, to: masterID, recipe: recipe(for: working), in: catalog,
                           master: master, ap: ap, summary: &summary)
                 photoIDByVersionUuid[working.uuid] = masterID

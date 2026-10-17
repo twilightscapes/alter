@@ -157,7 +157,9 @@ struct ContentView: View {
                     } else {
                         switch store.viewMode {
                         case .browser:
-                            if case .person(let id) = store.source {
+                            if store.showsMap {
+                                PlacesView()
+                            } else if case .person(let id) = store.source {
                                 VStack(spacing: 0) {
                                     PersonHeader(faces: store.faces, personID: id)
                                     Divider()
@@ -199,9 +201,11 @@ struct ContentView: View {
                         .padding(.bottom, store.viewMode == .browser ? 16 : 80)
                         .animation(.easeOut(duration: 0.2), value: CameraHub.shared.tether != nil)
                 }
-                inspectorDivider
-                InspectorView()
-                    .frame(width: clampedInspectorWidth)
+                if store.isInspectorShown {
+                    inspectorDivider
+                    InspectorView()
+                        .frame(width: clampedInspectorWidth)
+                }
             }
             // These insets MUST live on the detail content, not on the
             // NavigationSplitView: on macOS the split view does not propagate
@@ -310,6 +314,25 @@ struct ContentView: View {
                                                     .sheet(isPresented: $store.isImportWindowPresented) {
                                                         ImportWindow().environmentObject(store)
                                                     }
+                                                    .background(
+                                                        Color.clear
+                                                            .sheet(item: $store.pendingTrack) { pending in
+                                                                GPSTrackSheet(track: pending.track)
+                                                                    .environmentObject(store)
+                                                            }
+                                                            .background(
+                                                                Color.clear
+                                                                    .sheet(isPresented: $store.isPrintSheetPresented) {
+                                                                        PrintSheet().environmentObject(store)
+                                                                    }
+                                                                    .background(
+                                                                        Color.clear
+                                                                            .sheet(isPresented: $store.isMetadataPresetsEditorPresented) {
+                                                                                MetadataPresetsEditor().environmentObject(store)
+                                                                            }
+                                                                    )
+                                                            )
+                                                    )
                                             )
                                     )
                             )
@@ -466,7 +489,7 @@ private struct FullScreenView: View {
                     } else if store.source == .faces {
                         FacesView()
                     } else if store.viewMode == .browser {
-                        GridView()
+                        if store.showsMap { PlacesView() } else { GridView() }
                     } else if store.selection.count > 1, !store.primaryOnly {
                         MultiViewerView()
                     } else {

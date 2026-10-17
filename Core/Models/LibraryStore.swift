@@ -20,15 +20,43 @@ import UniformTypeIdentifiers
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published var catalog: Catalog? {
-        didSet { if catalog !== oldValue { faces.libraryChanged() } }
+        didSet {
+            if catalog !== oldValue {
+                faces.libraryChanged()
+                placeNameTask?.cancel()
+                placeNameTask = nil
+            }
+        }
     }
     /// Faces: scanning, people, suggestions (its own object, so scan
     /// progress doesn't redraw everything).
     lazy var faces = FacesController(store: self)
+
+    // MARK: Places (map) state — see LibraryStore+Places.swift
+
+    /// The map is up for the current source (Places always has it).
+    @Published var mapMode = false { didSet { if mapMode != oldValue { mapRegionIDs = nil; reloadItems() } } }
+    /// Which photos the grid under the map shows.
+    @Published var mapScope: MapScope = .inView { didSet { if mapScope != oldValue { reloadItems() } } }
+    /// Photos inside the map's visible area (nil until the map reports).
+    @Published var mapRegionIDs: Set<Int64>? { didSet { if mapRegionIDs != oldValue, mapScope == .inView { reloadItems() } } }
+    /// Every placed photo in the current source (filters applied), for the pins.
+    @Published var mapPoints: [MapPoint] = []
+    /// A GPS track being shown (Import GPS Track), if any.
+    @Published var mapTrack: [GPXTrack.Point]?
+    var locationBackfillRunning = false
+    /// The place-name lookups running in the background, if any.
+    var placeNameTask: Task<Void, Never>?
+    /// A GPS track chosen to apply (File ▸ Import ▸ GPS Track…).
+    @Published var pendingTrack: PendingTrack?
     @Published var items: [PhotoItem] = []
     @Published var selection: Set<Int64> = []
     @Published var source: LibrarySource? = .all {
-        didSet { reloadItems() }
+        didSet {
+            // A new source's map reports its own visible area.
+            if source != oldValue, mapRegionIDs != nil { mapRegionIDs = nil }
+            reloadItems()
+        }
     }
 
     @Published var folders: [FolderRow] = []
@@ -224,6 +252,7 @@ final class LibraryStore: ObservableObject {
                 self?.takeKeyboardFromTextFields()
             }
             backfillExifIfNeeded()
+            backfillLocationsIfNeeded()
         } catch {
             statusMessage = error.localizedDescription
             catalog = nil
@@ -513,6 +542,7 @@ final class LibraryStore: ObservableObject {
         keywordVocabulary = (try? catalog.keywordVocabulary()) ?? []
         keywordTree = (try? catalog.keywordTree()) ?? []
         stackInfo = (try? catalog.stacks()) ?? [:]
+        stackPositions = (try? catalog.stackPositions()) ?? [:]
         versionCounts = (try? catalog.versionCounts()) ?? [:]
         if let counts = try? catalog.counts() {
             allCount = counts.all
@@ -553,6 +583,8 @@ final class LibraryStore: ObservableObject {
             return seenStacks.insert(stackID).inserted
         }
         applyFilterAndSort()
+        orderStacks()
+        applyMap()
         // Versions ride right behind their master, whatever the sort.
         if !expandedVersionMasters.isEmpty {
             var spliced: [PhotoItem] = []
@@ -669,16 +701,6 @@ final class LibraryStore: ObservableObject {
 
     func focusSearch() { searchFocusRequest += 1 }
 
-    /// photoID → has GPS, filled lazily by scanGPS() (ImageIO header reads).
-    private var gpsCache: [Int64: Bool] = [:]
-    private var gpsScanRunning = false
-
-    func gpsKnown(_ id: Int64) -> Bool? { gpsCache[id] }
-
-    func noteGPS(_ has: Bool, for ids: [Int64]) {
-        for id in ids { gpsCache[id] = has }
-    }
-
     private func applyFilterAndSort() {
         // Search first, then the grid filter — both narrow, order is free,
         // but search is usually the sharper knife.
@@ -714,11 +736,8 @@ final class LibraryStore: ObservableObject {
             items = items.filter { item in
                 item.metadata.keywords.contains { $0.caseInsensitiveCompare(Self.playgroundKeyword) == .orderedSame }
             }
-        case .hasGPS, .noGPS:
-            let want = gridFilter == .hasGPS
-            let unknown = items.filter { gpsCache[$0.id] == nil }
-            items = items.filter { gpsCache[$0.id] == want }
-            if !unknown.isEmpty { scanGPS(unknown) }
+        case .hasGPS: items = items.filter(\.hasLocation)
+        case .noGPS: items = items.filter { !$0.hasLocation }
         }
 
         switch sortKey {
@@ -739,28 +758,6 @@ final class LibraryStore: ObservableObject {
                 }
                 return $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
             }
-        }
-    }
-
-    /// Read just the GPS header of files we haven't classified yet, then
-    /// re-filter. Cheap per file; runs once per photo per session.
-    private func scanGPS(_ pending: [PhotoItem]) {
-        guard !gpsScanRunning else { return }
-        gpsScanRunning = true
-        statusMessage = "Checking \(pending.count) photo\(pending.count == 1 ? "" : "s") for location data…"
-        let targets = pending.map { ($0.id, $0.url) }
-        Task {
-            let found = await Task.detached(priority: .utility) { () -> [Int64: Bool] in
-                var result: [Int64: Bool] = [:]
-                for (id, url) in targets {
-                    result[id] = ExifReader.hasGPS(url: url)
-                }
-                return result
-            }.value
-            gpsCache.merge(found) { _, new in new }
-            gpsScanRunning = false
-            statusMessage = ""
-            reloadItems()
         }
     }
 
@@ -787,7 +784,9 @@ final class LibraryStore: ObservableObject {
         }
         updateItem(id) { item in
             mutate(&item.metadata)
-            item.dirty = true
+            // An Aperture original's metadata lives in the catalog only —
+            // nothing to write to its file (the catalog agrees).
+            item.dirty = !isApertureOriginal(item)
             try? catalog.updateMetadata(photoID: id, item.metadata, dirty: true)
         }
         if let counts = try? catalog.counts() {
@@ -1242,6 +1241,7 @@ final class LibraryStore: ObservableObject {
         reloadSidebar()
         reloadItems()
         backfillExifIfNeeded()
+        backfillLocationsIfNeeded()
         statusMessage = "Imported \(importedIDs.count) item\(importedIDs.count == 1 ? "" : "s")."
             + (skipped.isEmpty ? "" : " Skipped \(Self.skippedSummary(skipped)) — not library media.")
         faces.startScan()
@@ -1274,7 +1274,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    /// Quarter turns, ⌘[ / ⌘]: a recipe rotation, never the file.
+    /// Quarter turns, [ / ]: a recipe rotation, never the file.
     func rotate(_ quarterTurns: Int, for ids: [Int64]) {
         guard let catalog else { return }
         for id in ids {
@@ -1529,7 +1529,9 @@ final class LibraryStore: ObservableObject {
 
     func setStackPick(_ id: Int64) {
         guard let catalog, let item = item(id), let stackID = item.stackID else { return }
-        try? catalog.setStackPick(stackID: stackID, photoID: id)
+        // Aperture's pick is the stack's first: it moves to the front.
+        let members = fullStackOrder(stackID)
+        try? catalog.setStackOrder(stackID: stackID, photoIDs: [id] + members.filter { $0 != id })
         reloadSidebar()
         reloadItems()
     }
@@ -2158,6 +2160,8 @@ final class LibraryStore: ObservableObject {
 
     @Published var snippets: [Snippet] = Snippets.load()
     @Published var isSnippetsEditorPresented = false
+    /// Metadata ▸ Edit Metadata Presets…
+    @Published var isMetadataPresetsEditorPresented = false
 
     func saveSnippets(_ updated: [Snippet]) {
         snippets = updated
@@ -2288,34 +2292,53 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - GPS
 
-    func setGPS(latitude: Double, longitude: Double, for allIDs: [Int64]) async {
-        let ids = allIDs.filter { id in item(id).map { !isApertureOriginal($0) } ?? false }
-        if ids.isEmpty {
-            alertMessage = "These are in an Aperture library — Alter never writes into those originals."
+    /// Place photos: in the catalog always, and in each file too — except
+    /// an Aperture library's originals, which Alter never writes.
+    func setGPS(latitude: Double, longitude: Double, for ids: [Int64]) async {
+        await setLocations(ids.map { ($0, latitude, longitude) })
+    }
+
+    /// Each photo its own place (a GPS track gives every shot its spot).
+    func setLocations(_ places: [(id: Int64, latitude: Double, longitude: Double)]) async {
+        guard let catalog, !places.isEmpty else { return }
+        for place in places {
+            try? catalog.setLocation(photoIDs: [place.id], latitude: place.latitude, longitude: place.longitude)
+            noteLocation(place.latitude, place.longitude, for: place.id)
+        }
+        reloadItems()
+        lookUpPlaceNamesIfNeeded()
+        let writable = places.filter { place in item(place.id).map { !isApertureOriginal($0) } ?? false }
+        guard !writable.isEmpty else {
+            statusMessage = "Location saved to \(places.count) photo\(places.count == 1 ? "" : "s") (in the library — Aperture originals aren't written)."
             return
         }
         isWorking = true
         defer { isWorking = false }
         var done = 0
-        for id in ids {
-            guard let current = item(id) else { continue }
-            statusMessage = "Writing location \(done + 1) of \(ids.count)…"
+        for place in writable {
+            guard let url = item(place.id)?.url ?? (try? catalog.photoPath(place.id)).map(URL.init(fileURLWithPath:)) else { continue }
+            statusMessage = "Writing location \(done + 1) of \(writable.count)…"
             do {
-                try await ExifToolService.writeGPS(latitude: latitude, longitude: longitude, to: current.url)
-                noteGPS(true, for: [id])
+                try await ExifToolService.writeGPS(latitude: place.latitude, longitude: place.longitude, to: url)
                 done += 1
             } catch {
                 statusMessage = error.localizedDescription
             }
         }
-        statusMessage = "Location saved to \(done) photo\(done == 1 ? "" : "s")."
+        statusMessage = "Location saved to \(places.count) photo\(places.count == 1 ? "" : "s")."
     }
 
     func removeGPS(for id: Int64) async {
-        guard let current = item(id) else { return }
+        guard let current = item(id), let catalog else { return }
+        try? catalog.setLocation(photoIDs: [id], latitude: nil, longitude: nil)
+        noteLocation(nil, nil, for: id)
+        reloadItems()
+        guard !isApertureOriginal(current) else {
+            statusMessage = "Location removed from \(current.filename)."
+            return
+        }
         do {
             try await ExifToolService.removeGPS(from: current.url)
-            noteGPS(false, for: [id])
             statusMessage = "Location removed from \(current.filename)."
         } catch {
             statusMessage = error.localizedDescription
@@ -2513,6 +2536,14 @@ final class LibraryStore: ObservableObject {
 
     @Published var isBatchChangePresented = false
     @Published var isAdjustDatePresented = false
+    /// File ▸ Print (⌘P).
+    @Published var isPrintSheetPresented = false
+    /// Aperture's I: the inspector shown or hidden.
+    @Published var isInspectorShown = UserDefaults.standard.object(forKey: "alter.inspectorShown") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(isInspectorShown, forKey: "alter.inspectorShown") }
+    }
+    /// Each stacked master's place in its stack (Promote/Demote).
+    var stackPositions: [Int64: Int] = [:]
     /// File ▸ Import ▸ Files…: Aperture's Import window.
     @Published var isImportWindowPresented = false
 

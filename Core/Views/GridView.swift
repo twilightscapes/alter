@@ -274,6 +274,17 @@ struct GridView: View {
                 .buttonStyle(.plain)
                 .help("Clear filter")
             }
+            if store.source != .places, store.source != .faces {
+                Button {
+                    store.toggleMap()
+                } label: {
+                    Label("Map", systemImage: store.mapMode ? "map.fill" : "map")
+                        .foregroundColor(store.mapMode ? .accentColor : .primary)
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help(store.mapMode ? "Hide the map" : "Show these photos on a map — drag photos onto it to place them")
+            }
 
             Spacer()
 

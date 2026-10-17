@@ -11,6 +11,7 @@
 //  kind, yes/no) get a picker; free-text fields get a text field.
 //
 
+import CoreLocation
 import SwiftUI
 
 struct SmartAlbumEditor: View {
@@ -125,8 +126,22 @@ struct SmartRulesEditor: View {
                         }
                         .labelsHidden()
                         .frame(width: 140)
+                        .onChange(of: rule.op) { op in
+                            // Location's two kinds of value don't mix.
+                            guard rule.field == .location else { return }
+                            if op == .near, NearPlace(rule.value) == nil { rule.value = "" }
+                            if op == .is, rule.value != "yes", rule.value != "no" { rule.value = "yes" }
+                            if op == .contains || op == .notContains,
+                               rule.value == "yes" || rule.value == "no" || NearPlace(rule.value) != nil { rule.value = "" }
+                        }
 
-                        if let choices = rule.field.choices {
+                        if rule.field == .location, rule.op == .near {
+                            NearPlaceField(value: $rule.value)
+                        } else if rule.field == .location, rule.op == .contains || rule.op == .notContains {
+                            TextField("place name", text: $rule.value)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(minWidth: 120)
+                        } else if let choices = rule.field.choices {
                             Picker("Value", selection: $rule.value) {
                                 ForEach(choices, id: \.value) { choice in
                                     Text(choice.label).tag(choice.value)
@@ -166,6 +181,64 @@ struct SmartRulesEditor: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+            }
+        }
+    }
+}
+
+/// "within [25] km of [Paris]" — the place is looked up when it's typed.
+struct NearPlaceField: View {
+    @Binding var value: String
+    @State private var kilometres = "25"
+    @State private var place = ""
+    @State private var looking = false
+    @State private var failed = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("km", text: $kilometres)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 44)
+                .onSubmit(commit)
+            Text("km of")
+            TextField("place", text: $place)
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 110)
+                .onSubmit(commit)
+            if looking {
+                ProgressView().controlSize(.small)
+            } else if NearPlace(value) != nil {
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    .help("Found")
+            } else if failed {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                    .help("Couldn't find that place")
+            }
+        }
+        .onAppear {
+            if let near = NearPlace(value) {
+                kilometres = near.kilometres.formatted()
+                place = near.name
+            }
+        }
+    }
+
+    private func commit() {
+        let km = Double(kilometres.trimmingCharacters(in: .whitespaces)) ?? 25
+        let name = place.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        // Same place, new radius: no need to look it up again.
+        if let near = NearPlace(value), near.name == name {
+            value = NearPlace(kilometres: km, latitude: near.latitude, longitude: near.longitude, name: name).encoded
+            return
+        }
+        looking = true
+        failed = false
+        CLGeocoder().geocodeAddressString(name) { placemarks, _ in
+            DispatchQueue.main.async {
+                looking = false
+                guard let spot = placemarks?.first?.location?.coordinate else { failed = true; return }
+                value = NearPlace(kilometres: km, latitude: spot.latitude, longitude: spot.longitude, name: name).encoded
             }
         }
     }

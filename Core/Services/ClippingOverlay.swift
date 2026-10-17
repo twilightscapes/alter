@@ -57,10 +57,17 @@ enum ClippingOverlay {
 enum BrushOverlayRenderer {
     private static let context = CIContext()
 
-    static func render(strokes: [BrushStroke], size: CGSize, mode: ViewerView.BrushOverlay) -> CGImage? {
+    static func render(strokes: [BrushStroke], size: CGSize, mode: ViewerView.BrushOverlay,
+                       guide: CGImage? = nil) -> CGImage? {
         guard size.width > 0, size.height > 0 else { return nil }
         let extent = CGRect(origin: .zero, size: size)
-        let mask = EditRenderer.brushMask(strokes, extent: extent)
+        // Detect Edges strokes read the photo being shown, scaled to the mask.
+        let guideImage = guide.flatMap { cg -> CIImage? in
+            guard strokes.contains(where: { $0.detectEdges == true }), cg.width > 0, cg.height > 0 else { return nil }
+            return CIImage(cgImage: cg).transformed(by: CGAffineTransform(
+                scaleX: size.width / CGFloat(cg.width), y: size.height / CGFloat(cg.height)))
+        }
+        let mask = EditRenderer.brushMask(strokes, extent: extent, guide: guideImage)
         let output: CIImage
         switch mode {
         case .none:

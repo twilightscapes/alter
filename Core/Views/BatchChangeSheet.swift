@@ -41,9 +41,26 @@ struct BatchChangeSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Batch Change")
                 .font(.title3.weight(.semibold))
-            Text("\(targets.count) photo\(targets.count == 1 ? "" : "s") selected. Only ticked fields change.")
-                .font(.callout)
-                .foregroundColor(.secondary)
+            HStack {
+                Text("\(targets.count) photo\(targets.count == 1 ? "" : "s") selected. Only ticked fields change.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                Spacer()
+                MetadataPresetPicker { preset in
+                    func take(_ value: String, _ text: inout String, _ on: inout Bool) {
+                        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !v.isEmpty else { return }
+                        text = v
+                        on = true
+                    }
+                    take(preset.title, &title, &setTitle)
+                    take(preset.caption, &caption, &setCaption)
+                    take(preset.creator, &creator, &setCreator)
+                    take(preset.copyright, &copyright, &setCopyright)
+                    take(preset.keywords, &keywords, &setKeywords)
+                }
+                .controlSize(.small)
+            }
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                 row("Title", on: $setTitle) { TextField("Title", text: $title) }

@@ -17,7 +17,7 @@ Status key: ✅ done · 🔶 partial · ⬜ not started · ➖ deliberately skip
 | Full Screen (F) with auto-hiding filmstrip and toolbar, HUD inspector (H) | ✅ (2026-10-15) | — |
 | Primary Only (⌥U) / show multiple selected in viewer (up to 12) | ✅ (2026-10-15) | — |
 | Quick Preview (P), Show Master (M), Hot & Cold areas (⌥⇧H) | ✅ M shows master, ⌥M compares, hot/cold | P ➖ (previews already fast) |
-| Rotate ⌘[ ⌘] | ✅ keys + control bar | — |
+| Rotate [ ] (Aperture's keys; ⌘[ ⌘] are Promote/Demote) | ✅ keys + control bar | — |
 | Ratings 1–5, 0 none, 9 reject, +/−, flag /, labels ⌃0–7 | ✅ KeyCommands; Reject hidden by default | — |
 | Control bar: ratings, rotate, prev/next, keyword controls, Primary Only | ✅ | — |
 | Dark grey theme, viewer background shade preference | ✅ Settings ▸ Viewer | — |
@@ -27,7 +27,7 @@ Status key: ✅ done · 🔶 partial · ⬜ not started · ➖ deliberately skip
 | Aperture | Alter today | Plan |
 |---|---|---|
 | Bricks: checkbox / gear / Add Adjustment, sliders w/ numeric + reset | ✅ | — |
-| Brush In / Brush Away on every brick's gear; Brush HUD (size, softness, strength, Detect Edges, overlay: none/colour/B&W/mask; feather/erase/apply; Clear) | ✅ (2026-10-16) | 🔶 Detect Edges later |
+| Brush In / Brush Away on every brick's gear; Brush HUD (size, softness, strength, Detect Edges, overlay: none/colour/B&W/mask; feather/erase/apply; Clear) | ✅ (2026-10-16; Detect Edges 2026-10-16) | — |
 | Quick Brushes menu (Skin Smoothing, Dodge, Burn, Polarize, Intensify Contrast, Saturate, Desaturate, Blur, Sharpen, Halo Reduction, Noise Reduction, Definition, Vibrancy, Contrast) | ✅ (Halo Reduction ➖) | — |
 | Straighten tool (G) with grid overlay, drag to rotate | ✅ (2026-10-16) | — |
 | Crop tool (C) HUD: aspect presets, custom size, Show Guides, Constrain | ✅ aspects, Custom W:H, guides, px readout | — |
@@ -48,13 +48,13 @@ Status key: ✅ done · 🔶 partial · ⬜ not started · ➖ deliberately skip
 |---|---|---|
 | Projects as the primary container, Folders nest, Albums inside Projects | ✅ projects, nested folders, albums inside projects; Aperture import fills all three | — |
 | Keywords HUD (⇧H) hierarchical keyword library, keyword controls bar with button sets | ✅ HUD (outline when the library has a hierarchy), controls bar, ⌥1–⌥8 | — |
-| Batch Change (⇧⌘B): metadata presets, time adjust, version naming | ✅ sheet (metadata, keywords add/replace, rating, label, flag) | time adjust / version naming ➖ |
-| Metadata views & presets (General, EXIF, IPTC Core…) | ✅ Basic / IPTC / All | presets ⬜ |
+| Batch Change (⇧⌘B): metadata presets, time adjust, version naming | ✅ sheet (metadata, keywords add/replace, rating, label, flag); Adjust Date & Time | version naming ➖ |
+| Metadata views & presets (General, EXIF, IPTC Core…) | ✅ Basic / IPTC / All; metadata presets (Metadata menu, Batch Change, Import) | — |
 | Smart album rules: date/calendar, camera, lens, ISO/aperture/shutter, file type, import session, text | ✅ date, file type, camera, lens, ISO, focal length | import session ➖ |
-| Stacks: Auto-Stack slider HUD, Open/Close all, pick | ✅ Auto-Stack sheet with live count | — |
+| Stacks: Auto-Stack slider HUD, Open/Close all, pick, Promote/Demote | ✅ Auto-Stack sheet with live count; Promote ⌘[ / Demote ⌘] | — |
 | Light Table | ⬜ | ➖ later, if ever |
-| Faces | ⬜ | ➖ |
-| Places | ✅ GPS set/remove, map in Info | — |
+| Faces | ✅ (2026-10-16) Vision + SFace, corkboard, Confirm Faces, Name tool, Person rule | names → keywords on export ⬜ |
+| Places | ✅ (2026-10-16) Places map, Map per view, drag to place, find a place, Import GPS Track, Location rule | ✅ place names (Apple geocoder, cached per ~1 km) |
 
 ## 4. Output
 
@@ -63,7 +63,12 @@ Status key: ✅ done · 🔶 partial · ⬜ not started · ➖ deliberately skip
 | Export Versions/Masters with presets, file naming presets, watermark | ✅ (export presets, naming presets, watermark already existed) | — |
 | Slideshow (basic + presets) | ✅ basic (dissolve, Ken Burns, seconds, loop) | presets/music ➖ |
 | Web pages / journals | ✅ gallery | — |
-| Print / Books | ⬜ | ➖ |
+| Print | ✅ (2026-10-16) Standard, Contact & Review Sheets, 4×6/5×7/8×10/Wallets, own presets, live preview, ~300 ppi renders | — |
+| Books | ⬜ | ➖ |
+| Import window (cards, cameras), tethered shooting | ✅ (2026-10-16; tethering untested on a camera) | — |
+| Filter HUD | ✅ (2026-10-16) | — |
+| Secondary Viewer (Mirror / Alternate / Blank) | ✅ (2026-10-16) | Span ➖ |
+| Show Inspector (I), Share menu | ✅ (2026-10-16) | — |
 
 ## Order of work
 

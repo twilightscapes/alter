@@ -399,10 +399,21 @@ struct ImportWindow: View {
                     TextField("Project name", text: $newProjectName)
                 }
             }
-            Section("Metadata") {
+            Section {
                 TextField("Creator", text: $creator)
                 TextField("Copyright", text: $copyright)
                 TextField("Keywords", text: $keywords, prompt: Text("comma, separated"))
+            } header: {
+                HStack {
+                    Text("Metadata")
+                    Spacer()
+                    MetadataPresetPicker { preset in
+                        if !preset.creator.isEmpty { creator = preset.creator }
+                        if !preset.copyright.isEmpty { copyright = preset.copyright }
+                        if !preset.keywords.isEmpty { keywords = preset.keywords }
+                    }
+                    .controlSize(.small)
+                }
             }
         }
         .formStyle(.grouped)

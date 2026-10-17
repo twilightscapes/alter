@@ -326,10 +326,12 @@ enum EditRenderer {
                 mask = raster.cropped(to: image.extent)
                 // A selection touched up with the Brush.
                 if !layer.strokes.isEmpty {
-                    mask = brushMask(layer.strokes, extent: image.extent, base: mask)
+                    mask = brushMask(layer.strokes, extent: image.extent, base: mask,
+                                     guide: layer.strokes.contains { $0.detectEdges == true } ? image : nil)
                 }
             } else if !layer.strokes.isEmpty {
-                mask = brushMask(layer.strokes, extent: image.extent)
+                mask = brushMask(layer.strokes, extent: image.extent,
+                                 guide: layer.strokes.contains { $0.detectEdges == true } ? image : nil)
             } else if layer.inverted == true {
                 // Brushed away with nothing painted yet: applies everywhere.
                 mask = CIImage(color: .white).cropped(to: image.extent)
@@ -353,10 +355,16 @@ enum EditRenderer {
     /// softness feathers the disc's edge.
     /// Strokes painted over `base` (black when nil): add strokes in white,
     /// erase strokes in black — so a selection mask can be touched up.
-    static func brushMask(_ strokes: [BrushStroke], extent: CGRect, base: CIImage? = nil) -> CIImage {
+    /// `guide` is the photo a Detect Edges stroke reads its edges from.
+    static func brushMask(_ strokes: [BrushStroke], extent: CGRect, base: CIImage? = nil,
+                          guide: CIImage? = nil) -> CIImage {
         var mask = base?.cropped(to: extent).composited(over: CIImage(color: .black).cropped(to: extent))
             ?? CIImage(color: .black).cropped(to: extent)
         for stroke in strokes {
+            if stroke.detectEdges == true, let guide {
+                mask = edgeAwareDab(stroke, onto: mask, extent: extent, guide: guide)
+                continue
+            }
             let radius = max(stroke.radius, 0.001) * extent.width
             // Normalized top-left origin → CI bottom-left.
             let center = CIVector(x: extent.minX + stroke.x * extent.width,
@@ -378,6 +386,57 @@ enum EditRenderer {
             mask = gradient.cropped(to: extent).composited(over: mask)
         }
         return mask
+    }
+
+    /// A Detect Edges dab: the soft disc, weighted by how close each pixel
+    /// is in colour to the photo under the dab's centre (its average there,
+    /// worked out on the GPU) — full strength within a small difference,
+    /// nothing past a larger one. Everything cropped to the dab.
+    private static func edgeAwareDab(_ stroke: BrushStroke, onto mask: CIImage, extent: CGRect,
+                                     guide: CIImage) -> CIImage {
+        let radius = max(stroke.radius, 0.001) * extent.width
+        let cx = extent.minX + stroke.x * extent.width, cy = extent.minY + (1 - stroke.y) * extent.height
+        let rect = CGRect(x: cx - radius, y: cy - radius, width: 2 * radius, height: 2 * radius)
+            .intersection(extent).integral
+        guard !rect.isEmpty else { return mask }
+        let hard = radius * (1 - min(max(stroke.softness, 0), 1))
+        guard let disc = CIFilter(name: "CIRadialGradient", parameters: [
+            "inputCenter": CIVector(x: cx, y: cy),
+            "inputRadius0": max(hard, 0.5),
+            "inputRadius1": radius,
+            "inputColor0": CIColor.white,
+            "inputColor1": CIColor.black,
+        ])?.outputImage?.cropped(to: rect) else { return mask }
+        // The colour under the centre: a small area's average.
+        let core = max(2, radius * 0.25)
+        let sample = CGRect(x: cx - core, y: cy - core, width: 2 * core, height: 2 * core).intersection(extent)
+        let average = guide.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: sample)])
+            .clampedToExtent().cropped(to: rect)
+        // |pixel − centre colour|, summed over the channels, to a weight:
+        // 1 up to `near`, 0 from `far`.
+        let near = 0.06, far = 0.22
+        let k = 1 / (far - near)
+        let difference = guide.cropped(to: rect)
+            .applyingFilter("CIColorAbsoluteDifference", parameters: ["inputImage2": average])
+        let row = CIVector(x: -k / 3, y: -k / 3, z: -k / 3, w: 0)
+        let weight = difference.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": row, "inputGVector": row, "inputBVector": row,
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBiasVector": CIVector(x: 1 + k * near, y: 1 + k * near, z: 1 + k * near, w: 1),
+        ]).applyingFilter("CIColorClamp").cropped(to: rect)
+        let strength = min(max(stroke.strength ?? 1, 0.05), 1)
+        let dab = disc.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: weight])
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: strength, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: strength, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: strength, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            ]).cropped(to: rect)
+        let ink = CIImage(color: (stroke.erase ?? false) ? .black : .white).cropped(to: rect)
+        return ink.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: mask.cropped(to: rect),
+            kCIInputMaskImageKey: dab,
+        ]).cropped(to: rect).composited(over: mask)
     }
 
     /// Repair heals, Clone copies — see Retouch.swift.
