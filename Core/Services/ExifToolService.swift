@@ -143,6 +143,16 @@ struct ExifToolService {
         ])
     }
 
+    /// Move every date in a file (taken, digitised, modified) by `seconds` —
+    /// exiftool's date shift: "-AllDates+=0:0:D h:m:s".
+    static func shiftDates(by seconds: Double, in url: URL) async throws {
+        var rest = Int(abs(seconds).rounded())
+        let days = rest / 86_400; rest %= 86_400
+        let shift = "0:0:\(days) \(rest / 3600):\(rest % 3600 / 60):\(rest % 60)"
+        _ = try await run(arguments: ["-overwrite_original", "-q", "-m",
+                                      "-AllDates\(seconds < 0 ? "-" : "+")=\(shift)", url.path])
+    }
+
     /// Strip all GPS data from a photo.
     static func removeGPS(from url: URL) async throws {
         _ = try await run(arguments: ["-overwrite_original", "-q", "-m", "-GPS:all=", url.path])

@@ -490,6 +490,12 @@ struct PhotoItem: Identifiable, Equatable {
     var addedAt: Double = 0
     /// The original file's modification time (unix time) — sort key.
     var fileDate: Double = 0
+    /// When it was taken (seconds since 1970), from EXIF or Aperture, or
+    /// as adjusted; nil until read.
+    var captureDate: Double?
+    /// The date Alter sorts and searches by: when it was taken, or the
+    /// file's date when that isn't known.
+    var date: Double { captureDate ?? fileDate }
 
     var filename: String { url.lastPathComponent }
     var isVersion: Bool { versionOf != nil }
@@ -540,6 +546,7 @@ struct PhotoItem: Identifiable, Equatable {
         self.dirty = (row["dirty"] as? Int64 ?? 0) == 1
         self.addedAt = row["added_at"] as? Double ?? 0
         self.fileDate = row["mtime"] as? Double ?? 0
+        self.captureDate = row["capture_date"] as? Double
         self.memeJSON = row["meme"] as? String ?? ""
     }
 }

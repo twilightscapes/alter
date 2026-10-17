@@ -38,6 +38,52 @@ struct SmartAlbumEditor: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
 
+            SmartRulesEditor(rules: $rules, count: previewCount)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(existing == nil ? "Create" : "Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .onAppear {
+            if let existing {
+                name = existing.name
+                rules = existing.rules.rules.isEmpty
+                    ? SmartAlbumRules(matchAll: existing.rules.matchAll, rules: [SmartAlbumRule()])
+                    : existing.rules
+            }
+        }
+    }
+
+    private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        if let existing {
+            store.updateSmartAlbum(existing.id, name: trimmed, rules: rules)
+        } else {
+            store.createSmartAlbum(named: trimmed, rules: rules)
+        }
+        dismiss()
+    }
+}
+
+/// Match all/any and the rule rows (field · operator · value) — shared by
+/// the smart album sheet and the Filter HUD.
+struct SmartRulesEditor: View {
+    @Binding var rules: SmartAlbumRules
+    /// How many photos match, shown beside Add Rule.
+    let count: Int
+    /// The Filter HUD can run with no rules (filter off); a smart album
+    /// keeps at least one.
+    var allowEmpty = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
                 Text("Match")
                 Picker("", selection: $rules.matchAll) {
@@ -102,7 +148,7 @@ struct SmartAlbumEditor: View {
                             Image(systemName: "minus.circle")
                         }
                         .buttonStyle(.plain)
-                        .disabled(rules.rules.count == 1)
+                        .disabled(!allowEmpty && rules.rules.count == 1)
                         .help("Remove this rule")
                         .accessibilityLabel("Remove rule")
                     }
@@ -115,40 +161,11 @@ struct SmartAlbumEditor: View {
                     }
                     .buttonStyle(.plain)
                     Spacer()
-                    Text("\(previewCount) photo\(previewCount == 1 ? "" : "s") match")
+                    Text("\(count) photo\(count == 1 ? "" : "s") match")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(existing == nil ? "Create" : "Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
         }
-        .padding(20)
-        .frame(width: 560)
-        .onAppear {
-            if let existing {
-                name = existing.name
-                rules = existing.rules.rules.isEmpty
-                    ? SmartAlbumRules(matchAll: existing.rules.matchAll, rules: [SmartAlbumRule()])
-                    : existing.rules
-            }
-        }
-    }
-
-    private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        if let existing {
-            store.updateSmartAlbum(existing.id, name: trimmed, rules: rules)
-        } else {
-            store.createSmartAlbum(named: trimmed, rules: rules)
-        }
-        dismiss()
     }
 }

@@ -182,6 +182,13 @@ struct ContentView: View {
                     .padding(.leading, 16)
                     .padding(.bottom, store.viewMode == .browser ? 16 : 80)
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    // A tethered session's HUD floats while it runs.
+                    TetherHUD()
+                        .padding(.trailing, 16)
+                        .padding(.bottom, store.viewMode == .browser ? 16 : 80)
+                        .animation(.easeOut(duration: 0.2), value: CameraHub.shared.tether != nil)
+                }
                 inspectorDivider
                 InspectorView()
                     .frame(width: clampedInspectorWidth)
@@ -217,11 +224,11 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
 
                 Button {
-                    store.presentImportPanel()
+                    store.isImportWindowPresented = true
                 } label: {
                     Label("Import", systemImage: "square.and.arrow.down.on.square")
                 }
-                .help("Import folders or images — referenced in place (⌘I)")
+                .help("Import from a card, drive or folder (⌘I)")
 
                 Button {
                     Task { await store.saveDirty() }
@@ -283,6 +290,18 @@ struct ContentView: View {
                                     .sheet(isPresented: $store.isAutoStackPresented) {
                                         AutoStackSheet().environmentObject(store)
                                     }
+                                    .background(
+                                        Color.clear
+                                            .sheet(isPresented: $store.isAdjustDatePresented) {
+                                                AdjustDateSheet().environmentObject(store)
+                                            }
+                                            .background(
+                                                Color.clear
+                                                    .sheet(isPresented: $store.isImportWindowPresented) {
+                                                        ImportWindow().environmentObject(store)
+                                                    }
+                                            )
+                                    )
                             )
                     )
             )

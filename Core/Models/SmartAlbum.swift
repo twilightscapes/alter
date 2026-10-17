@@ -182,9 +182,10 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             guard let want = Double(value.trimmingCharacters(in: .whitespaces)), let focal = item.focalLength else { return false }
             return op == .atMost ? focal <= want : focal >= want
         case .date:
-            // "2010-08-21": on or after / on or before, by the file's date.
+            // "2010-08-21": on or after / on or before, by when it was taken
+            // (the file's date if that isn't known).
             guard let day = Self.dayFormatter.date(from: value.trimmingCharacters(in: .whitespaces)) else { return true }
-            let fileDate = Date(timeIntervalSince1970: item.fileDate)
+            let fileDate = Date(timeIntervalSince1970: item.date)
             switch op {
             case .atMost: return fileDate < day.addingTimeInterval(86_400)
             default: return fileDate >= day

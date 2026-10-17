@@ -44,6 +44,7 @@ struct GridView: View {
 
     // Grid-level album creation.
     @State private var isNamingAlbum = false
+    @State private var isFilterShown = false
     @State private var newAlbumName = ""
     @State private var albumSeedIDs: [Int64] = []
 
@@ -246,9 +247,26 @@ struct GridView: View {
             }
             .fixedSize()
             .help("Show only photos with this colour label")
-            if store.gridFilter != .all {
+            // Aperture's Filter HUD: rules on top of Show and search.
+            Button {
+                isFilterShown.toggle()
+            } label: {
+                Label(store.isBrowserFilterActive
+                      ? "Filter (\(store.browserRules?.rules.count ?? 0))" : "Filter",
+                      systemImage: store.isBrowserFilterActive
+                      ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .foregroundColor(store.isBrowserFilterActive ? .accentColor : .primary)
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .help("Filter what's showing by rating, label, keyword, date, camera, text…")
+            .popover(isPresented: $isFilterShown, arrowEdge: .bottom) {
+                FilterHUD().environmentObject(store)
+            }
+            if store.gridFilter != .all || store.isBrowserFilterActive {
                 Button {
                     store.gridFilter = .all
+                    store.browserRules = nil
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
@@ -384,7 +402,7 @@ struct GridView: View {
                     .foregroundColor(.secondary)
                 if store.allCount == 0 {
                     HStack(spacing: 10) {
-                        Button("Import Folder…") { store.presentImportPanel() }
+                        Button("Import…") { store.isImportWindowPresented = true }
                         Button("Import from Photos…") { store.importFromPhotos() }
                     }
                     .padding(.top, 6)

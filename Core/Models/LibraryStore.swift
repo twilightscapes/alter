@@ -209,6 +209,7 @@ final class LibraryStore: ObservableObject {
             noteRecentLibrary(libraryURL)
             selection = []
             source = .all
+            browserRules = nil
             reloadSidebar()
             reloadItems()
             statusMessage = "Opened \(libraryName)."
@@ -578,7 +579,9 @@ final class LibraryStore: ObservableObject {
             switch self {
             case .name: return "Name"
             case .imported: return "Date Imported"
-            case .fileDate: return "File Date"
+            // Raw value kept ("fileDate") so a saved sort survives; it now
+            // sorts by when the photo was taken.
+            case .fileDate: return "Date Taken"
             case .rating: return "Rating"
             }
         }
@@ -649,6 +652,13 @@ final class LibraryStore: ObservableObject {
     @Published var searchText = "" {
         didSet { if searchText != oldValue { reloadItems() } }
     }
+    /// Aperture's Filter HUD: rules (the smart-album kind) narrowing whatever
+    /// is showing, on top of search and Show. nil or empty = off.
+    @Published var browserRules: SmartAlbumRules? {
+        didSet { if browserRules != oldValue { reloadItems() } }
+    }
+    var isBrowserFilterActive: Bool { !(browserRules?.rules.isEmpty ?? true) }
+
     /// Bumped by the Find menu item (⌘F); the browser bar focuses its field.
     @Published var searchFocusRequest = 0
 
@@ -678,6 +688,10 @@ final class LibraryStore: ObservableObject {
 
         if let labelFilter {
             items = items.filter { $0.label == labelFilter }
+        }
+
+        if let browserRules, !browserRules.rules.isEmpty {
+            items = items.filter { browserRules.matches($0) }
         }
 
         switch gridFilter {
@@ -711,7 +725,7 @@ final class LibraryStore: ObservableObject {
         case .imported:
             items.sort { sortAscending ? $0.addedAt < $1.addedAt : $0.addedAt > $1.addedAt }
         case .fileDate:
-            items.sort { sortAscending ? $0.fileDate < $1.fileDate : $0.fileDate > $1.fileDate }
+            items.sort { sortAscending ? $0.date < $1.date : $0.date > $1.date }
         case .rating:
             // Rating ties break by name so the order is stable.
             items.sort {
@@ -1111,7 +1125,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    private nonisolated static func collectImageFiles(from urls: [URL])
+    nonisolated static func collectImageFiles(from urls: [URL])
         -> (files: [(URL, URL?)], skipped: [String: Int]) {
         // (file, owning folder root) — folder root nil for loose files.
         // Skipped: extension → count, so the import can SAY what it dropped
@@ -1155,8 +1169,9 @@ final class LibraryStore: ObservableObject {
         return "\(total) file\(total == 1 ? "" : "s") (\(exts.joined(separator: ", ")))"
     }
 
-    func importURLs(_ urls: [URL]) async {
-        guard let catalog else { return }
+    @discardableResult
+    func importURLs(_ urls: [URL]) async -> [Int64] {
+        guard let catalog else { return [] }
         let (found, skipped) = Self.collectImageFiles(from: urls)
         guard !found.isEmpty else {
             statusMessage = ""
@@ -1171,12 +1186,12 @@ final class LibraryStore: ObservableObject {
             if audioOnly {
                 alertMessage = "Audio belongs on the timeline, not in the library.\n\n"
                     + "Open a photo or video in the timeline editor (⌘M), then use Add Audio Track to bring in MP3, WAV, or M4A — with its own volume, trimming, and waveform."
-                return
+                return []
             }
             let what = skipped.isEmpty ? "Nothing importable was found."
                 : "Skipped \(Self.skippedSummary(skipped)) — not a format the library catalogs."
             alertMessage = what + "\n\nAlter imports JPEG, PNG, WebP, TIFF, HEIC, GIF, BMP, camera RAW (CR2, CR3, NEF, ARW, DNG, and more), and MOV, MP4, M4V, AVI, MPG video. Audio (MP3, WAV, M4A) is added inside the timeline editor with Add Audio Track."
-            return
+            return []
         }
 
         isWorking = true
@@ -1225,6 +1240,7 @@ final class LibraryStore: ObservableObject {
             selection = Set(arrived)
             revealID = arrived.first
         }
+        return importedIDs
     }
 
     // MARK: - Rating / flag
@@ -1517,12 +1533,12 @@ final class LibraryStore: ObservableObject {
     func autoStack(gapSeconds gap: Double) {
         guard let catalog else { return }
         let candidates = items
-            .filter { !$0.isVersion && $0.stackID == nil && $0.fileDate > 0 }
-            .sorted { $0.fileDate < $1.fileDate }
+            .filter { !$0.isVersion && $0.stackID == nil && $0.date > 0 }
+            .sorted { $0.date < $1.date }
         var groups: [[PhotoItem]] = []
         var current: [PhotoItem] = []
         for item in candidates {
-            if let last = current.last, item.fileDate - last.fileDate <= gap {
+            if let last = current.last, item.date - last.date <= gap {
                 current.append(item)
             } else {
                 if current.count >= 2 { groups.append(current) }
@@ -1625,12 +1641,12 @@ final class LibraryStore: ObservableObject {
     /// How many stacks (and photos in them) a gap would make of what's shown.
     func autoStackPreview(gapSeconds gap: Double) -> (stacks: Int, photos: Int) {
         let candidates = items
-            .filter { !$0.isVersion && $0.stackID == nil && $0.fileDate > 0 }
-            .sorted { $0.fileDate < $1.fileDate }
+            .filter { !$0.isVersion && $0.stackID == nil && $0.date > 0 }
+            .sorted { $0.date < $1.date }
         var stacks = 0, photos = 0
         var run = 1
         for (index, item) in candidates.enumerated() where index > 0 {
-            if item.fileDate - candidates[index - 1].fileDate <= gap {
+            if item.date - candidates[index - 1].date <= gap {
                 run += 1
             } else {
                 if run >= 2 { stacks += 1; photos += run }
@@ -1661,7 +1677,8 @@ final class LibraryStore: ObservableObject {
                         let info = ExifReader.read(url: entry.url)
                         return (entry.id, Catalog.CameraInfo(
                             camera: info.camera ?? "", lens: info.lens ?? "", iso: info.isoValue,
-                            focalLength: info.focalValue, aperture: info.apertureValue, shutter: info.shutterSeconds))
+                            focalLength: info.focalValue, aperture: info.apertureValue, shutter: info.shutterSeconds,
+                            captureDate: info.captureTimestamp))
                     }
                 }.value
                 guard let self else { return }
@@ -1680,6 +1697,7 @@ final class LibraryStore: ObservableObject {
                         self.items[index].focalLength = info.focalLength
                         self.items[index].aperture = info.aperture
                         self.items[index].shutter = info.shutter
+                        if self.items[index].captureDate == nil { self.items[index].captureDate = info.captureDate }
                     }
                 }
                 if read.count < 100 { break }
@@ -2481,6 +2499,41 @@ final class LibraryStore: ObservableObject {
     // MARK: - Export
 
     @Published var isBatchChangePresented = false
+    @Published var isAdjustDatePresented = false
+    /// File ▸ Import ▸ Files…: Aperture's Import window.
+    @Published var isImportWindowPresented = false
+
+    /// The sidebar's selected project's name, if one is selected.
+    var selectedProjectName: String? {
+        selectedProjectID.flatMap { findProject($0)?.name }
+    }
+
+    /// Adjust Date & Time: move when these were taken by `seconds` (in the
+    /// catalog always; in the files too if asked — never an Aperture
+    /// original).
+    func adjustCaptureDates(_ ids: [Int64], by seconds: Double, writeToFiles: Bool) async {
+        guard let catalog, abs(seconds) >= 1 else { return }
+        let masters = Array(Set(ids.compactMap { id in item(id).map { $0.versionOf ?? $0.id } }))
+        try? catalog.shiftCaptureDates(photoIDs: masters, by: seconds)
+        reloadItems()
+        var written = 0
+        if writeToFiles {
+            isWorking = true
+            defer { isWorking = false }
+            for id in masters {
+                guard let photo = item(id), !isApertureOriginal(photo) else { continue }
+                statusMessage = "Changing dates in files… \(written + 1) of \(masters.count)"
+                if (try? await ExifToolService.shiftDates(by: seconds, in: photo.url)) != nil {
+                    written += 1
+                    try? catalog.touchFile(photoID: id, url: photo.url)
+                }
+            }
+            reloadItems()
+        }
+        let change = AdjustDateSheet.describe(seconds)
+        statusMessage = "Adjusted \(masters.count) photo\(masters.count == 1 ? "" : "s") by \(change)"
+            + (writeToFiles ? "; \(written) file\(written == 1 ? "" : "s") updated." : ".")
+    }
     @Published var isExportSheetPresented = false
 
     /// Name for prefilled gallery titles: the current album, else the library.

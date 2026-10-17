@@ -78,7 +78,7 @@ struct ApertureLibrary {
                 fileName: row["fileName"] as? String ?? "",
                 isReferenced: (row["fileIsReference"] as? Int64 ?? 0) == 1,
                 isMissing: (row["isMissing"] as? Int64 ?? 0) == 1,
-                imageDate: row["imageDate"] as? Double)
+                imageDate: (row["imageDate"] as? Double) ?? (row["imageDate"] as? Int64).map(Double.init))
         }
         return out
     }

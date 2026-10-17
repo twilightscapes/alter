@@ -331,6 +331,16 @@ final class Catalog {
             try db.run("UPDATE schema_info SET version = 9")
         }
 
+        // v10: when the photo was taken, kept in the catalog (from EXIF, or
+        // Aperture's own date) so sorting, smart albums and Auto-Stack go by
+        // it, and so Adjust Date & Time can move it. capture_read = the
+        // EXIF date was looked for (or set by hand — never overwritten).
+        if version < 10 {
+            try? db.execute("ALTER TABLE photos ADD COLUMN capture_date REAL")
+            try? db.execute("ALTER TABLE photos ADD COLUMN capture_read INTEGER NOT NULL DEFAULT 0")
+            try db.run("UPDATE schema_info SET version = 10")
+        }
+
         // Repair: an early v5 uniqueness index was (path, version_of),
         // which allowed only ONE version per master. Swap it for the
         // masters-only partial index. Idempotent and cheap on every open.
@@ -936,19 +946,60 @@ final class Catalog {
         var focalLength: Double?
         var aperture: Double?
         var shutter: Double?
+        /// When it was taken (seconds since 1970), if known.
+        var captureDate: Double?
     }
 
     /// Write a photo's camera data (and its versions'), mark it read.
     func setCameraInfo(photoID: Int64, _ info: CameraInfo) throws {
         try db.run("""
-            UPDATE photos SET camera = ?, lens = ?, iso = ?, focal_length = ?, aperture = ?, shutter = ?, exif_read = 1
+            UPDATE photos SET camera = ?, lens = ?, iso = ?, focal_length = ?, aperture = ?, shutter = ?, exif_read = 1,
+                capture_date = CASE WHEN capture_read = 1 THEN capture_date ELSE COALESCE(?, capture_date) END,
+                capture_read = 1
             WHERE id = ? OR version_of = ?
-            """, [info.camera, info.lens, info.iso.map { Int64($0) }, info.focalLength, info.aperture, info.shutter, photoID, photoID])
+            """, [info.camera, info.lens, info.iso.map { Int64($0) }, info.focalLength, info.aperture, info.shutter,
+                  info.captureDate, photoID, photoID])
     }
 
     /// Masters whose EXIF hasn't been read into the catalog yet.
+    /// "name|size" for every master — how the Import window spots files
+    /// already in the library (a card's file copied in before, say).
+    func knownFileKeys() throws -> Set<String> {
+        var keys = Set<String>()
+        for row in try db.query("SELECT filename, file_size FROM photos WHERE version_of IS NULL") {
+            guard let name = row["filename"] as? String else { continue }
+            keys.insert(Self.fileKey(name: name, size: row["file_size"] as? Int64))
+        }
+        return keys
+    }
+
+    func photoPath(_ id: Int64) throws -> String {
+        guard let path = try db.query("SELECT path FROM photos WHERE id = ?", [id]).first?["path"] as? String
+        else { throw NSError(domain: "Alter", code: 404) }
+        return path
+    }
+
+    static func fileKey(name: String, size: Int64?) -> String {
+        "\(name.lowercased())|\(size ?? -1)"
+    }
+
+    /// Adjust Date & Time: move when these were taken by `seconds` (their
+    /// versions with them). A photo with no capture date starts from its
+    /// file's date. Marked as set, so the EXIF pass never undoes it.
+    func shiftCaptureDates(photoIDs: [Int64], by seconds: Double) throws {
+        try performBatch {
+            for id in photoIDs {
+                try db.run("""
+                    UPDATE photos SET capture_date = COALESCE(capture_date, mtime, 0) + ?, capture_read = 1
+                    WHERE id = ? OR version_of = ?
+                    """, [seconds, id, id])
+            }
+        }
+    }
+
     func photosNeedingExif(limit: Int = 200) throws -> [(id: Int64, url: URL)] {
-        try db.query("SELECT id, path FROM photos WHERE version_of IS NULL AND exif_read = 0 LIMIT ?", [Int64(limit)])
+        try db.query("SELECT id, path FROM photos WHERE version_of IS NULL AND (exif_read = 0 OR capture_read = 0) LIMIT ?",
+                     [Int64(limit)])
             .compactMap { row in
                 guard let id = row["id"] as? Int64, let path = row["path"] as? String else { return nil }
                 return (id, URL(fileURLWithPath: path))

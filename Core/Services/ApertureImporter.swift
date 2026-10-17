@@ -192,7 +192,11 @@ enum ApertureImporter {
                 photoMeta.keywords = meta.keywords
                 let masterID = try catalog.insertPhoto(url: url, folderID: folderID, metadata: photoMeta)
                 summary.masters += 1
-                if let camera = cameraInfo[working.modelId] {
+                // Aperture's date for the photo (seconds since 2001) — which
+                // includes any Adjust Time made there.
+                var camera = cameraInfo[working.modelId] ?? Catalog.CameraInfo()
+                camera.captureDate = master.imageDate.map { $0 + Date.timeIntervalBetween1970AndReferenceDate }
+                if cameraInfo[working.modelId] != nil || camera.captureDate != nil {
                     try catalog.setCameraInfo(photoID: masterID, camera)
                 }
                 try apply(working, to: masterID, recipe: recipe(for: working), in: catalog,
