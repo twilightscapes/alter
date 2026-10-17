@@ -55,6 +55,12 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            GroupBox("Faces") {
+                FacesSettingsPane(faces: store.faces, models: FaceModelStore.shared)
+                    .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Watermark") {
                 WatermarkSettingsPane()
                     .padding(6)
@@ -71,6 +77,39 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+// MARK: - Faces
+
+struct FacesSettingsPane: View {
+    @ObservedObject var faces: FacesController
+    @ObservedObject var models: FaceModelStore
+    @State private var confirmDelete = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Find faces in my photos", isOn: Binding(get: { faces.enabled },
+                                                           set: { $0 ? faces.enable() : faces.disable() }))
+            Text(models.state == .ready
+                 ? "Uses \(FaceModelStore.source), on this Mac only — no photo or face leaves it. Turning this off stops looking; names stay."
+                 : "Downloads \(FaceModelStore.source) once (\(FaceModelStore.downloadSize)). Everything runs on this Mac — no photo or face leaves it.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack {
+                Button("Look Again") { faces.rescan() }
+                    .disabled(!faces.enabled || models.state != .ready || faces.isScanning)
+                    .help("Scan every photo again (names you've given stay)")
+                Button("Delete Face Data…") { confirmDelete = true }
+                    .help("Forget every face and name in this library, and remove the model")
+            }
+            .controlSize(.small)
+        }
+        .confirmationDialog("Delete all face data?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) { faces.deleteAllData() }
+        } message: {
+            Text("Every face found and every name given in this library is forgotten, and the face recognition model is removed. Photos aren't touched.")
+        }
     }
 }
 

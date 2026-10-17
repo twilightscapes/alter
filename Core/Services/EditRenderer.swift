@@ -75,8 +75,13 @@ enum EditRenderer {
     /// can be carried back onto the master (T inverted) and stay on its
     /// object whatever the crop does later.
     static func geometryTransform(_ edits: PhotoEdits, sourceExtent: CGRect) -> CGAffineTransform {
+        geometry(edits, sourceExtent: sourceExtent).transform
+    }
+
+    /// geometryTransform, plus the size of the geometry-applied image.
+    static func geometry(_ edits: PhotoEdits, sourceExtent: CGRect) -> (transform: CGAffineTransform, size: CGSize) {
         guard edits.hasGeometry else {
-            return CGAffineTransform(translationX: -sourceExtent.minX, y: -sourceExtent.minY)
+            return (CGAffineTransform(translationX: -sourceExtent.minX, y: -sourceExtent.minY), sourceExtent.size)
         }
         let probe = CIImage(color: .black).cropped(to: sourceExtent)
         var total = CGAffineTransform.identity
@@ -125,7 +130,7 @@ enum EditRenderer {
             extent = rect
             step(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
         }
-        return total
+        return (total, extent.size)
     }
 
     static func applyGeometry(_ edits: PhotoEdits, to input: CIImage) -> CIImage {

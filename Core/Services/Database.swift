@@ -144,6 +144,10 @@ final class Database {
                 sqlite3_bind_double(prepared, index, value)
             case let value as String:
                 sqlite3_bind_text(prepared, index, value, -1, SQLITE_TRANSIENT)
+            case let value as Data:
+                _ = value.withUnsafeBytes { bytes in
+                    sqlite3_bind_blob(prepared, index, bytes.baseAddress, Int32(bytes.count), SQLITE_TRANSIENT)
+                }
             default:
                 sqlite3_bind_text(prepared, index, String(describing: param!), -1, SQLITE_TRANSIENT)
             }

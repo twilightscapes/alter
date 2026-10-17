@@ -481,6 +481,8 @@ struct PhotoItem: Identifiable, Equatable {
     var focalLength: Double? = nil
     var aperture: Double? = nil
     var shutter: Double? = nil
+    /// Who's in it (named faces), from the catalog.
+    var people: [String] = []
     /// Metadata cached in the catalog but not yet written into the file.
     var dirty: Bool = false
     var status: Status = .idle
@@ -514,6 +516,7 @@ struct PhotoItem: Identifiable, Equatable {
             || metadata.altText.localizedCaseInsensitiveContains(term)
             || metadata.creator.localizedCaseInsensitiveContains(term)
             || metadata.keywords.contains { $0.localizedCaseInsensitiveContains(term) }
+            || people.contains { $0.localizedCaseInsensitiveContains(term) }
     }
 
     init?(row: [String: Any]) {
@@ -548,6 +551,7 @@ struct PhotoItem: Identifiable, Equatable {
         self.fileDate = row["mtime"] as? Double ?? 0
         self.captureDate = row["capture_date"] as? Double
         self.memeJSON = row["meme"] as? String ?? ""
+        self.people = (row["people"] as? String ?? "").split(separator: "\n").map(String.init)
     }
 }
 

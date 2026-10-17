@@ -79,11 +79,16 @@ enum LibrarySource: Hashable {
     case smartAlbum(Int64)
     /// A project (its photos) or an organising folder (every project under it).
     case project(Int64)
+    /// Aperture's Faces corkboard (its own pane, no grid).
+    case faces
+    /// One person's photos.
+    case person(Int64)
 }
 
 final class Catalog {
     let libraryURL: URL
-    private let db: Database
+    /// Internal so the catalog's extensions (Faces) can reach it.
+    let db: Database
 
     static let fileExtension = "alterlib"
 
@@ -341,6 +346,43 @@ final class Catalog {
             try db.run("UPDATE schema_info SET version = 10")
         }
 
+        // v11: Faces. A face is a box on a master (normalised, top-left,
+        // in the upright image) with SFace's fingerprint; it belongs to a
+        // person only once someone has said so. `people` on photos is the
+        // names, kept in step, so smart albums and search can read them.
+        if version < 11 {
+            try db.execute("""
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                key_face_id INTEGER,
+                position INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+                image_w INTEGER NOT NULL DEFAULT 0,
+                image_h INTEGER NOT NULL DEFAULT 0,
+                quality REAL NOT NULL DEFAULT 0,
+                print BLOB,
+                person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                manual INTEGER NOT NULL DEFAULT 0,
+                ignored INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+            CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
+            CREATE TABLE IF NOT EXISTS face_rejections (
+                face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                PRIMARY KEY (face_id, person_id)
+            );
+            """)
+            try? db.execute("ALTER TABLE photos ADD COLUMN faces_scanned INTEGER NOT NULL DEFAULT 0")
+            try? db.execute("ALTER TABLE photos ADD COLUMN people TEXT NOT NULL DEFAULT ''")
+            try db.run("UPDATE schema_info SET version = 11")
+        }
+
         // Repair: an early v5 uniqueness index was (path, version_of),
         // which allowed only ONE version per master. Swap it for the
         // masters-only partial index. Idempotent and cheap on every open.
@@ -554,6 +596,10 @@ final class Catalog {
             let ids = try projectAndDescendantIDs(id)
             let marks = ids.map { _ in "?" }.joined(separator: ",")
             rows = try db.query(base + " AND p.project_id IN (\(marks))" + order, ids.map { $0 as Any? })
+        case .faces:
+            rows = []
+        case .person(let id):
+            rows = try db.query(base + " AND p.id IN (SELECT photo_id FROM faces WHERE person_id = ?)" + order, [id])
         case .album(let id):
             rows = try db.query(
                 "SELECT p.* FROM photos p JOIN album_items ai ON ai.photo_id = p.id"
