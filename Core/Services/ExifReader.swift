@@ -53,6 +53,21 @@ enum ExifReader {
         return gps[kCGImagePropertyGPSLatitude] != nil
     }
 
+    /// Header-only read of where it was taken (nil = no GPS).
+    static func location(url: URL) -> CLLocationCoordinate2D? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+              let latitude = gps[kCGImagePropertyGPSLatitude] as? Double,
+              let longitude = gps[kCGImagePropertyGPSLongitude] as? Double else { return nil }
+        let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
+        let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
+        // 0,0 is a camera with no fix writing zeros, not a photo off Ghana.
+        guard latitude != 0 || longitude != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: latRef == "S" ? -latitude : latitude,
+                                      longitude: lonRef == "W" ? -longitude : longitude)
+    }
+
     static func read(url: URL) -> PhotoExifInfo {
         var info = PhotoExifInfo()
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),

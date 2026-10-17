@@ -55,7 +55,7 @@ struct ExifSection: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .task(id: "\(item.url.path)#\(refreshToken)") {
+        .task(id: "\(item.url.path)#\(refreshToken)#\(item.latitude ?? 0),\(item.longitude ?? 0)") {
             let url = item.url
             var loaded = await Task.detached(priority: .userInitiated) {
                 ExifReader.read(url: url)
@@ -70,6 +70,14 @@ struct ExifSection: View {
             if loaded.aperture == nil, let f = item.aperture { loaded.aperture = String(format: "ƒ/%.1f", f) }
             if loaded.exposure == nil, let t = item.shutter, t > 0 {
                 loaded.exposure = t >= 1 ? String(format: "%.1f s", t) : "1/\(Int((1 / t).rounded())) s"
+            }
+            // Where it was taken is the catalog's call once it has read the
+            // file (an Aperture original placed or cleared here keeps its
+            // file's GPS untouched).
+            if item.gpsRead || item.hasLocation {
+                loaded.coordinate = item.latitude.flatMap { lat in
+                    item.longitude.map { CLLocationCoordinate2D(latitude: lat, longitude: $0) }
+                }
             }
             info = loaded
             if let coordinate = loaded.coordinate {
@@ -136,6 +144,12 @@ struct ExifSection: View {
                 .cornerRadius(8)
             }
 
+            if info.coordinate != nil, !item.place.isEmpty {
+                Label(item.place, systemImage: "mappin.and.ellipse")
+                    .font(.callout)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
             HStack(spacing: 8) {
                 Button(info.coordinate == nil ? "Add Location…" : "Edit Location…") {
                     isEditorPresented = true

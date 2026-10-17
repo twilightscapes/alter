@@ -217,6 +217,7 @@ struct RetouchOverlay: View {
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
             keyMonitor = nil
+            KeyCommands.bracketsClaimed = false
             NSCursor.arrow.set()
         }
         .accessibilityElement()
@@ -500,6 +501,7 @@ struct RetouchOverlay: View {
 
     private func installKeys() {
         guard keyMonitor == nil else { return }
+        KeyCommands.bracketsClaimed = true
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [tool] event in
             // Typing in a field (ALT text, keywords) is never a tool key.
             if NSApp.keyWindow?.firstResponder is NSText { return event }

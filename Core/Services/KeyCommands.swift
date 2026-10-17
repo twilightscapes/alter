@@ -18,6 +18,9 @@ import Foundation
 
 @MainActor
 final class KeyCommands {
+    /// A viewer tool using [ and ] itself (Retouch's brush size) has them.
+    static var bracketsClaimed = false
+
     private var monitor: Any?
     private weak var store: LibraryStore?
 
@@ -97,6 +100,15 @@ final class KeyCommands {
             return true
         case "o", "O":
             store.isLiftStampVisible.toggle()
+            return true
+        case "i", "I":
+            // Aperture's I: the inspector (its HUD in full screen).
+            if store.isFullScreenMode { store.isInspectorHUDVisible.toggle() } else { store.isInspectorShown.toggle() }
+            return true
+        case "[", "]":
+            // Aperture's rotate keys.
+            guard !Self.bracketsClaimed, !targets.isEmpty else { return false }
+            store.rotate(key == "]" ? 1 : -1, for: targets)
             return true
         case "f", "F":
             store.toggleFullScreenMode(window: window)

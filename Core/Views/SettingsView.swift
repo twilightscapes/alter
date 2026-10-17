@@ -61,6 +61,12 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            GroupBox("Places") {
+                PlacesSettingsPane()
+                    .padding(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Watermark") {
                 WatermarkSettingsPane()
                     .padding(6)
@@ -109,6 +115,29 @@ struct FacesSettingsPane: View {
             Button("Delete", role: .destructive) { faces.deleteAllData() }
         } message: {
             Text("Every face found and every name given in this library is forgotten, and the face recognition model is removed. Photos aren't touched.")
+        }
+    }
+}
+
+// MARK: - Places
+
+struct PlacesSettingsPane: View {
+    @EnvironmentObject var store: LibraryStore
+    @AppStorage(LibraryStore.placeNamesKey) private var lookUp = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Look up place names", isOn: $lookUp)
+                .onChange(of: lookUp) { on in
+                    if on { store.lookUpPlaceNamesIfNeeded() } else { store.placeNameTask?.cancel(); store.placeNameTask = nil }
+                }
+            Text("Names where photos were taken (\"Fort Worth, TX, United States\") for Info, search and smart albums. Asks Apple Maps about each place once, sending only the location — never a photo.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Button("Look Up Again") { store.relookUpPlaceNames() }
+                .controlSize(.small)
+                .disabled(!lookUp)
+                .help("Forget the names found so far and ask again")
         }
     }
 }

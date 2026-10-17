@@ -90,6 +90,9 @@ struct BrushStroke: Codable, Equatable, Hashable {
     var erase: Bool? = nil
     /// Aperture's brush Strength: how much of the look one dab applies.
     var strength: Double? = nil
+    /// Aperture's Detect Edges: the dab only takes where the photo is the
+    /// colour it is under the brush's centre, so it stops at edges.
+    var detectEdges: Bool? = nil
 }
 
 /// A brushed adjustment: its own recipe applied only where its strokes
@@ -483,6 +486,14 @@ struct PhotoItem: Identifiable, Equatable {
     var shutter: Double? = nil
     /// Who's in it (named faces), from the catalog.
     var people: [String] = []
+    /// Where it was taken, from the catalog (nil = not placed, or not read yet).
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var hasLocation: Bool { latitude != nil && longitude != nil }
+    /// The file's own GPS has been read into the catalog.
+    var gpsRead = false
+    /// Where that is, in words ("Fort Worth, Texas, United States"), once looked up.
+    var place: String = ""
     /// Metadata cached in the catalog but not yet written into the file.
     var dirty: Bool = false
     var status: Status = .idle
@@ -517,6 +528,7 @@ struct PhotoItem: Identifiable, Equatable {
             || metadata.creator.localizedCaseInsensitiveContains(term)
             || metadata.keywords.contains { $0.localizedCaseInsensitiveContains(term) }
             || people.contains { $0.localizedCaseInsensitiveContains(term) }
+            || place.localizedCaseInsensitiveContains(term)
     }
 
     init?(row: [String: Any]) {
@@ -552,6 +564,10 @@ struct PhotoItem: Identifiable, Equatable {
         self.captureDate = row["capture_date"] as? Double
         self.memeJSON = row["meme"] as? String ?? ""
         self.people = (row["people"] as? String ?? "").split(separator: "\n").map(String.init)
+        self.latitude = row["latitude"] as? Double
+        self.longitude = row["longitude"] as? Double
+        self.gpsRead = (row["gps_read"] as? Int64 ?? 0) == 1
+        self.place = row["place"] as? String ?? ""
     }
 }
 

@@ -102,6 +102,8 @@ struct ViewerView: View {
     // layer's recipe while the mode is up.
     @State private var brushMode = false
     @State private var brushRadius = 0.045      // fraction of image width
+    /// Aperture's Detect Edges: new strokes keep to the colour under the brush.
+    @AppStorage("brush.detectEdges") private var brushDetectEdges = false
     @State private var brushSoftness = 0.5
     @State private var brushErasing = false
     /// Aperture's brush Strength: how much of the look one dab applies.
@@ -267,8 +269,10 @@ struct ViewerView: View {
             let strokes = layer.strokes
             let size = image.size
             let mode = brushOverlay
+            let guide = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
             brushMaskImage = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-                guard let cg = BrushOverlayRenderer.render(strokes: strokes, size: size, mode: mode) else { return nil }
+                guard let cg = BrushOverlayRenderer.render(strokes: strokes, size: size, mode: mode, guide: guide)
+                else { return nil }
                 return NSImage(cgImage: cg, size: size)
             }.value
         }
@@ -848,12 +852,12 @@ struct ViewerView: View {
                         Button { store.rotate(-1, for: [item.id]) } label: {
                             Image(systemName: "rotate.left")
                         }
-                        .help("Rotate counterclockwise (⌘[)")
+                        .help("Rotate counterclockwise ([)")
                         .accessibilityLabel("Rotate counterclockwise")
                         Button { store.rotate(1, for: [item.id]) } label: {
                             Image(systemName: "rotate.right")
                         }
-                        .help("Rotate clockwise (⌘])")
+                        .help("Rotate clockwise (])")
                         .accessibilityLabel("Rotate clockwise")
                     }
                     Spacer()
@@ -1071,6 +1075,9 @@ struct ViewerView: View {
                     .frame(width: 60)
                     .accessibilityLabel("Brush strength")
             }
+            Toggle("Detect Edges", isOn: $brushDetectEdges)
+                .toggleStyle(.checkbox)
+                .help("Keep the brush to the colour under its centre, so it stops at edges (sky vs. trees)")
             Picker("Overlay", selection: $brushOverlay) {
                 ForEach(BrushOverlay.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -1718,7 +1725,8 @@ struct ViewerView: View {
         layers[index].strokes.append(BrushStroke(
             x: point.x, y: point.y, radius: brushRadius,
             softness: brushSoftness, erase: brushErasing ? true : nil,
-            strength: brushStrength < 0.995 ? brushStrength : nil))
+            strength: brushStrength < 0.995 ? brushStrength : nil,
+            detectEdges: brushDetectEdges ? true : nil))
         edits.brushes = layers
         binding.wrappedValue = edits
     }
@@ -2018,12 +2026,12 @@ struct ViewerView: View {
                 Button { rotateQuarter(clockwise: false) } label: {
                     Image(systemName: "rotate.left")
                 }
-                .help("Rotate 90° counterclockwise (⌘[)")
+                .help("Rotate 90° counterclockwise ([)")
                 .accessibilityLabel("Rotate left")
                 Button { rotateQuarter(clockwise: true) } label: {
                     Image(systemName: "rotate.right")
                 }
-                .help("Rotate 90° clockwise (⌘])")
+                .help("Rotate 90° clockwise (])")
                 .accessibilityLabel("Rotate right")
                 Button {
                     if let item { store.flip(horizontal: true, for: [item.id]) }
