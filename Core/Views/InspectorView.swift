@@ -262,6 +262,25 @@ private struct InfoPanel: View {
                     }
                 }
 
+                if !item.people.isEmpty {
+                    field("PEOPLE") {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 4)],
+                                  alignment: .leading, spacing: 4) {
+                            ForEach(item.people, id: \.self) { name in
+                                Button(name) {
+                                    if let person = store.faces.people.first(where: { $0.name == name }) {
+                                        store.source = .person(person.id)
+                                        store.viewMode = .browser
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .help("Show every photo of \(name)")
+                            }
+                        }
+                    }
+                }
+
                 if metadataView != .basic {
                 field("CREATOR") {
                     TextField("Photographer / byline", text: store.metadataBinding(\.creator, for: id))

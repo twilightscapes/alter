@@ -38,6 +38,9 @@ struct ViewerView: View {
     @State private var extensionToolID: String?
     // Red Eye (E).
     @State private var redEyeMode = false
+    /// The Name tool (Faces): boxes and names on the photo.
+    @State private var facesMode = false
+    @State private var addingFace = false
     @State private var redEyeRadius = 0.012
     @State private var showPlayground = false
     @State private var player: AVPlayer?
@@ -569,6 +572,10 @@ struct ViewerView: View {
                                            edits: store.editsBinding(for: item.id), undo: undoManager)
                                 .frame(width: geo.size.width, height: geo.size.height)
                         }
+                        if facesActive, let item {
+                            FacesOverlay(faces: store.faces, item: item, fit: fit, addingFace: $addingFace)
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
                         if redEyeMode, let item {
                             redEyeMarkers(for: item, fit: fit)
                         }
@@ -810,6 +817,8 @@ struct ViewerView: View {
                 cropControls
             } else if redEyeMode {
                 redEyeControls
+            } else if facesActive {
+                facesControls
             } else if straightenMode {
                 straightenControls
             } else if brushMode {
@@ -955,6 +964,12 @@ struct ViewerView: View {
                         Label("Red Eye", systemImage: "eye")
                     }
                     .help("Click each red pupil (E)")
+                    Button {
+                        enterFacesMode()
+                    } label: {
+                        Label("Name", systemImage: "person.crop.square")
+                    }
+                    .help("Name the people in this photo (Faces)")
                     ForEach(AlterExtensions.shared.viewerModeTools) { spec in
                         Button {
                             openExtensionTool(spec.id)
@@ -1844,6 +1859,30 @@ struct ViewerView: View {
         undoManager?.setActionName("Neutral White Balance")
     }
 
+    // MARK: - Faces (Name)
+
+    /// Name is on and no other tool has the photo.
+    private var facesActive: Bool {
+        facesMode && !retouchMode && !cropMode && !redEyeMode && !straightenMode && !brushMode
+            && extensionToolID == nil && item?.isVideo != true
+    }
+
+    private func enterFacesMode() {
+        retouchMode = false; cropMode = false; redEyeMode = false; straightenMode = false
+        loupeMode = false; compareMode = false; extensionToolID = nil
+        store.pickRequest = nil
+        if brushMode { exitBrushMode() }
+        addingFace = false
+        facesMode = true
+    }
+
+    private var facesControls: some View {
+        FacesTray(faces: store.faces, models: FaceModelStore.shared, addingFace: $addingFace) {
+            facesMode = false
+            addingFace = false
+        }
+    }
+
     // MARK: - Extension tools
 
     private var activeExtensionTool: ViewerToolSpec? {
@@ -1865,7 +1904,7 @@ struct ViewerView: View {
         guard item?.isVideo != true else { return }
         func only() {
             cropMode = false; straightenMode = false; retouchMode = false; redEyeMode = false
-            loupeMode = false; compareMode = false; extensionToolID = nil
+            loupeMode = false; compareMode = false; extensionToolID = nil; facesMode = false
             if brushMode { exitBrushMode() }
         }
         switch request {
@@ -1873,6 +1912,7 @@ struct ViewerView: View {
         case "straighten": only(); straightenMode = true
         case "retouch": only(); retouchMode = true
         case "redEye": only(); redEyeMode = true
+        case "faces": only(); enterFacesMode()
         case "brush": only(); enterBrushMode()
         case "loupe": loupeMode.toggle(); if !loupeMode { loupeHover = nil }
         case "master": showMaster.toggle()
@@ -2360,6 +2400,10 @@ struct ViewerView: View {
                     retouchMode = false
                 } else if redEyeMode {
                     redEyeMode = false
+                } else if facesActive, addingFace {
+                    addingFace = false
+                } else if facesActive {
+                    facesMode = false
                 } else if cropMode {
                     cropMode = false
                 } else if straightenMode {

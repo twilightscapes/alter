@@ -36,6 +36,8 @@ struct SidebarView: View {
                     .tag(LibrarySource.noAltText)
                 Label("Flagged", systemImage: "flag")
                     .tag(LibrarySource.flagged)
+                Label("Faces", systemImage: "person.crop.square")
+                    .tag(LibrarySource.faces)
                 Label("Videos", systemImage: "play.rectangle")
                     .tag(LibrarySource.videos)
                 Label("Recently Added", systemImage: "clock")

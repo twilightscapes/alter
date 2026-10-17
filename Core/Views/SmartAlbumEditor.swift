@@ -137,7 +137,8 @@ struct SmartRulesEditor: View {
                         } else {
                             TextField(rule.field == .date ? "yyyy-mm-dd"
                                       : rule.field == .iso ? "e.g. 800"
-                                      : rule.field == .focalLength ? "e.g. 50" : "text", text: $rule.value)
+                                      : rule.field == .focalLength ? "e.g. 50"
+                                      : rule.field == .person ? "name" : "text", text: $rule.value)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(minWidth: 120)
                         }

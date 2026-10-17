@@ -19,7 +19,12 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class LibraryStore: ObservableObject {
-    @Published var catalog: Catalog?
+    @Published var catalog: Catalog? {
+        didSet { if catalog !== oldValue { faces.libraryChanged() } }
+    }
+    /// Faces: scanning, people, suggestions (its own object, so scan
+    /// progress doesn't redraw everything).
+    lazy var faces = FacesController(store: self)
     @Published var items: [PhotoItem] = []
     @Published var selection: Set<Int64> = []
     @Published var source: LibrarySource? = .all {
@@ -773,6 +778,13 @@ final class LibraryStore: ObservableObject {
     /// Edit a metadata field: updates the row cache (dirty) + the UI item.
     func editMetadata(_ id: Int64, _ mutate: (inout PhotoMetadata) -> Void) {
         guard let catalog else { return }
+        // An edit that changes nothing (a text field handing back the same
+        // text as focus leaves it) must not mark the file for writing.
+        if let current = item(id)?.metadata {
+            var changed = current
+            mutate(&changed)
+            if changed == current { return }
+        }
         updateItem(id) { item in
             mutate(&item.metadata)
             item.dirty = true
@@ -1232,6 +1244,7 @@ final class LibraryStore: ObservableObject {
         backfillExifIfNeeded()
         statusMessage = "Imported \(importedIDs.count) item\(importedIDs.count == 1 ? "" : "s")."
             + (skipped.isEmpty ? "" : " Skipped \(Self.skippedSummary(skipped)) — not library media.")
+        faces.startScan()
         // Show the newcomers — select them and scroll the grid there, so an
         // import never lands invisibly below the fold.
         let visible = Set(items.map(\.id))

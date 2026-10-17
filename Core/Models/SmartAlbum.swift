@@ -59,7 +59,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
 
     enum Field: String, Codable, CaseIterable, Identifiable {
         case rating, flagged, label, keyword, text, kind, hasAlt, adjusted, filename, date, fileType,
-             camera, lens, iso, focalLength
+             camera, lens, iso, focalLength, person
         var id: String { rawValue }
 
         var label: String {
@@ -70,6 +70,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .lens: return "Lens"
             case .iso: return "ISO"
             case .focalLength: return "Focal Length (mm)"
+            case .person: return "Person"
             case .rating: return "Rating"
             case .flagged: return "Flagged"
             case .label: return "Color Label"
@@ -92,6 +93,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .kind, .fileType: return [.is, .isNot]
             case .date, .iso, .focalLength: return [.atLeast, .atMost]
             case .camera, .lens: return [.contains, .notContains]
+            case .person: return [.is, .isNot, .contains, .notContains]
             }
         }
 
@@ -109,7 +111,7 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             case .fileType:
                 return ["jpg", "heic", "png", "tif", "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "psd", "gif", "mov", "mp4"]
                     .map { ($0, $0.uppercased()) }
-            case .keyword, .text, .filename, .date, .camera, .lens, .iso, .focalLength:
+            case .keyword, .text, .filename, .date, .camera, .lens, .iso, .focalLength, .person:
                 return nil
             }
         }
@@ -169,6 +171,13 @@ struct SmartAlbumRule: Codable, Hashable, Identifiable {
             let want = value.lowercased()
             let same = ext == want || (want == "jpg" && ext == "jpeg") || (want == "tif" && ext == "tiff")
             return op == .isNot ? !same : same
+        case .person:
+            // "is" = that person (by name) is in it; "contains" = any name containing it.
+            let want = value.trimmingCharacters(in: .whitespaces)
+            let hit = op == .is || op == .isNot
+                ? item.people.contains { $0.caseInsensitiveCompare(want) == .orderedSame }
+                : item.people.contains { $0.localizedCaseInsensitiveContains(want) }
+            return op == .isNot || op == .notContains ? !hit : hit
         case .camera:
             let hit = item.camera.localizedCaseInsensitiveContains(value)
             return op == .notContains ? !hit : hit

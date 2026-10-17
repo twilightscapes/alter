@@ -200,6 +200,7 @@ private struct PhotosMenu: Commands {
                 tool("Straighten\tG", "straighten")
                 tool("Retouch\tX", "retouch")
                 tool("Red Eye\tE", "redEye")
+                tool("Name Faces", "faces")
                 ForEach(AlterExtensions.shared.viewerModeTools) { spec in
                     tool(spec.title + (spec.key.map { "\t" + String($0.character).uppercased() } ?? ""), spec.id)
                 }

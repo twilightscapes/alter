@@ -152,10 +152,20 @@ struct ContentView: View {
                     if let pane = AlterExtensions.shared.centerPane?(store) {
                         // An extension's editor or queue owns the centre pane.
                         pane
+                    } else if store.source == .faces {
+                        FacesView()
                     } else {
                         switch store.viewMode {
                         case .browser:
-                            GridView()
+                            if case .person(let id) = store.source {
+                                VStack(spacing: 0) {
+                                    PersonHeader(faces: store.faces, personID: id)
+                                    Divider()
+                                    GridView()
+                                }
+                            } else {
+                                GridView()
+                            }
                         case .viewer:
                             viewerPane
                         case .split:
@@ -453,6 +463,8 @@ private struct FullScreenView: View {
                 Group {
                     if let pane = AlterExtensions.shared.centerPane?(store) {
                         pane
+                    } else if store.source == .faces {
+                        FacesView()
                     } else if store.viewMode == .browser {
                         GridView()
                     } else if store.selection.count > 1, !store.primaryOnly {
