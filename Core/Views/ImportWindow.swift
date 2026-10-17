@@ -556,9 +556,7 @@ private struct ImportThumb: View {
         .id(tick)
         .task(id: url) {
             guard let url else { return }
-            image = await Task.detached(priority: .utility) {
-                ImageLoader.shared.thumbnail(for: url, maxPixel: 240)
-            }.value
+            image = await ImageLoader.shared.thumbnailAsync(for: url, maxPixel: 240)
         }
     }
 }

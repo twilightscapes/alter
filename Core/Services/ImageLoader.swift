@@ -151,6 +151,21 @@ final class ImageLoader {
         cache.removeAllObjects()
     }
 
+    /// Decoding happens here, not on Swift's shared threads: reading an
+    /// iCloud placeholder can block in the File Provider, and a grid of
+    /// those must not stall every other task in the app.
+    private static let decodeQueue = DispatchQueue(label: "app.altermedia.thumbnails", qos: .utility,
+                                                   attributes: .concurrent)
+
+    /// thumbnail(for:edits:maxPixel:), on the decode queue.
+    func thumbnailAsync(for url: URL, edits: PhotoEdits = PhotoEdits(), maxPixel: Int = 320) async -> NSImage? {
+        await withCheckedContinuation { continuation in
+            Self.decodeQueue.async {
+                continuation.resume(returning: self.thumbnail(for: url, edits: edits, maxPixel: maxPixel))
+            }
+        }
+    }
+
     func thumbnail(for url: URL, edits: PhotoEdits = PhotoEdits(), maxPixel: Int = 320) -> NSImage? {
         let key = NSURL(fileURLWithPath: url.path + "#\(maxPixel)#" + edits.cacheKey)
         if let cached = cache.object(forKey: key) { return cached }

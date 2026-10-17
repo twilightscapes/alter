@@ -140,9 +140,7 @@ struct FilmstripCell: View {
             if thumbnail == nil {
                 try? await FileLocality.ensureLocal(url)
             }
-            thumbnail = await Task.detached(priority: .utility) {
-                ImageLoader.shared.thumbnail(for: url, edits: edits)
-            }.value
+            thumbnail = await ImageLoader.shared.thumbnailAsync(for: url, edits: edits)
             isMissing = thumbnail == nil && !FileManager.default.fileExists(atPath: url.path)
         }
     }
