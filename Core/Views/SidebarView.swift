@@ -27,7 +27,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $store.source) {
-            Section("Library") {
+            SidebarSection("Library", id: "library") {
                 Label("All Media", systemImage: "photo.on.rectangle")
                     .badge(Int(store.allCount))
                     .tag(LibrarySource.all)
@@ -45,7 +45,7 @@ struct SidebarView: View {
 
             if let sections = AlterExtensions.shared.sidebarSections { sections(store) }
 
-            Section {
+            SidebarSection("Projects", id: "projects") {
                 OutlineGroup(store.projects, children: \.children) { node in
                     if node.kind == .album {
                         // An album inside a project (its id is negated in the tree).
@@ -69,32 +69,28 @@ struct SidebarView: View {
                         .foregroundColor(.secondary)
                         .help("Photos imported by folder, not filed in a project yet — drag them onto one")
                 }
-            } header: {
-                HStack {
-                    Text("Projects")
-                    Spacer()
-                    Menu {
-                        Button("New Project") {
-                            newProjectParent = nil; newProjectKind = .project
-                            newProjectName = ""; isNamingProject = true
-                        }
-                        Button("New Folder") {
-                            newProjectParent = nil; newProjectKind = .folder
-                            newProjectName = ""; isNamingProject = true
-                        }
-                    } label: {
-                        Image(systemName: "plus")
+            } accessory: {
+                Menu {
+                    Button("New Project") {
+                        newProjectParent = nil; newProjectKind = .project
+                        newProjectName = ""; isNamingProject = true
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("New Project or Folder — projects hold photos, folders hold projects")
+                    Button("New Folder") {
+                        newProjectParent = nil; newProjectKind = .folder
+                        newProjectName = ""; isNamingProject = true
+                    }
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("New Project or Folder — projects hold photos, folders hold projects")
             }
 
             if !store.folders.isEmpty {
-                Section("Folders") {
+                SidebarSection("Folders", id: "folders") {
                     ForEach(store.folders) { folder in
                         Label(folder.name, systemImage: "folder")
                             .tag(LibrarySource.folder(folder.id))
@@ -115,7 +111,7 @@ struct SidebarView: View {
                 }
             }
 
-            Section {
+            SidebarSection("Smart Albums", id: "smartAlbums") {
                 ForEach(store.smartAlbums) { album in
                     Label(album.name, systemImage: "gearshape.2")
                         .tag(LibrarySource.smartAlbum(album.id))
@@ -128,37 +124,29 @@ struct SidebarView: View {
                             }
                         }
                 }
-            } header: {
-                HStack {
-                    Text("Smart Albums")
-                    Spacer()
-                    Button {
-                        smartAlbumSheet = SmartAlbumSheet(album: nil)
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .help("New Smart Album — photos that match rules you set")
+            } accessory: {
+                Button {
+                    smartAlbumSheet = SmartAlbumSheet(album: nil)
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .buttonStyle(.plain)
+                .help("New Smart Album — photos that match rules you set")
             }
 
-            Section {
+            SidebarSection("Albums", id: "albums") {
                 ForEach(store.albums.filter { $0.parentID == nil }) { album in
                     AlbumRowView(album: album)
                         .tag(LibrarySource.album(album.id))
                 }
-            } header: {
-                HStack {
-                    Text("Albums")
-                    Spacer()
-                    Button {
-                        isNamingAlbum = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .help("New Album")
+            } accessory: {
+                Button {
+                    isNamingAlbum = true
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .buttonStyle(.plain)
+                .help("New Album")
             }
         }
         .listStyle(.sidebar)

@@ -88,6 +88,12 @@ final class LibraryStore: ObservableObject {
     /// True for a library that reads an Aperture bundle: metadata and
     /// adjustments live in ALTer's catalog, the originals are never written.
     var originalsAreReadOnly: Bool { catalog?.originalsAreReadOnly ?? false }
+    /// Does any of this library read an Aperture library in place?
+    var hasApertureLibraries: Bool { !(catalog?.aperturePaths.isEmpty ?? true) }
+    /// Originals inside an Aperture library are never written to.
+    func isApertureOriginal(_ item: PhotoItem) -> Bool {
+        catalog?.isApertureOriginal(item.url.path) ?? false
+    }
     /// Non-nil while an Aperture library is being read in.
     @Published var apertureProgress: ApertureImporter.Progress?
 
@@ -200,6 +206,7 @@ final class LibraryStore: ObservableObject {
         do {
             catalog = try Catalog(libraryURL: libraryURL)
             UserDefaults.standard.set(libraryURL.path, forKey: Self.lastLibraryKey)
+            noteRecentLibrary(libraryURL)
             selection = []
             source = .all
             reloadSidebar()
@@ -362,6 +369,104 @@ final class LibraryStore: ObservableObject {
         thread.qualityOfService = .userInitiated
         thread.stackSize = 16 << 20
         thread.start()
+    }
+
+    // MARK: - Importing another Aperture library
+
+    /// File ▸ Import ▸ Aperture Library…: another Aperture library into the
+    /// open one, as a folder of its own (Aperture's File ▸ Import ▸ Library).
+    func presentImportApertureLibraryPanel() {
+        guard let catalog else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Import Aperture Library"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.message = "Choose an .aplibrary to add to this library — Alter reads it in place and never modifies it"
+        panel.directoryURL = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            guard ApertureLibrary.isApertureLibrary(url) else {
+                self.statusMessage = "That isn't an Aperture library."
+                return
+            }
+            let name = url.deletingPathExtension().lastPathComponent
+            if catalog.aperturePaths.contains(url.standardizedFileURL.path) {
+                self.alertMessage = "\(name) is already in this library."
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = "Import “\(name)” into this library?"
+            var info = "It arrives as a folder named “\(name)” with its projects, folders and albums inside. Search, keywords and smart albums then cover both. The Aperture library itself isn't modified."
+            if catalog.metaValue("source") == "aperture", catalog.aperturePaths.count == 1,
+               let first = catalog.aperturePaths.first {
+                let firstName = URL(fileURLWithPath: first).deletingPathExtension().lastPathComponent
+                info += "\n\nThis library's own projects and albums move into a folder named “\(firstName)”, so each library is its own group."
+            }
+            alert.informativeText = info
+            alert.addButton(withTitle: "Import")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            self.importApertureLibrary(url, into: catalog.libraryURL)
+        }
+    }
+
+    private func importApertureLibrary(_ bundle: URL, into catalogURL: URL) {
+        apertureProgress = ApertureImporter.Progress(phase: "Opening…", done: 0, total: 1)
+        statusMessage = "Importing \(bundle.lastPathComponent)…"
+        // A deep-stacked thread, as for opening one (render matching builds
+        // long Core Image graphs).
+        let thread = Thread { [weak self] in
+            do {
+                let summary = try ApertureImporter.run(bundle: bundle, catalogURL: catalogURL, merge: true) { progress in
+                    DispatchQueue.main.async { self?.apertureProgress = progress }
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.apertureProgress = nil
+                    self.reloadSidebar()
+                    self.reloadItems()
+                    self.reloadKeywordVocabulary()
+                    self.statusMessage = "Imported \(bundle.lastPathComponent): \(summary.headline)."
+                    self.reportApertureOpen(summary, bundle: bundle)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.apertureProgress = nil
+                    self?.statusMessage = ""
+                    self?.alertMessage = error.localizedDescription
+                }
+            }
+        }
+        thread.name = "Alter.ApertureMerge"
+        thread.qualityOfService = .userInitiated
+        thread.stackSize = 16 << 20
+        thread.start()
+    }
+
+    // MARK: - Recent libraries (File ▸ Switch to Library)
+
+    private static let recentLibrariesKey = "alter_recent_libraries"
+
+    /// Libraries opened lately, newest first, that are still there.
+    var recentLibraries: [URL] {
+        (UserDefaults.standard.stringArray(forKey: Self.recentLibrariesKey) ?? [])
+            .map { URL(fileURLWithPath: $0) }
+            .filter { Catalog.isLibrary($0) }
+    }
+
+    fileprivate func noteRecentLibrary(_ url: URL) {
+        var paths = UserDefaults.standard.stringArray(forKey: Self.recentLibrariesKey) ?? []
+        paths.removeAll { $0 == url.standardizedFileURL.path }
+        paths.insert(url.standardizedFileURL.path, at: 0)
+        UserDefaults.standard.set(Array(paths.prefix(10)), forKey: Self.recentLibrariesKey)
+        objectWillChange.send()
+    }
+
+    func clearRecentLibraries() {
+        UserDefaults.standard.removeObject(forKey: Self.recentLibrariesKey)
+        if let catalog { noteRecentLibrary(catalog.libraryURL) }
     }
 
     /// What came across, and what didn't — once, right after the open.
@@ -1883,10 +1988,11 @@ final class LibraryStore: ObservableObject {
     /// it. Files ALTer has written into get the as-found snapshot written back;
     /// files never written just re-read, so unsaved catalog edits are discarded
     /// either way. Adjustments are untouched — they never lived in the file.
-    func revertMetadata(_ ids: [Int64]) async {
+    func revertMetadata(_ allIDs: [Int64]) async {
         guard let catalog else { return }
-        if originalsAreReadOnly {
-            alertMessage = "This library reads an Aperture library. Alter never writes into those originals, so there's nothing to revert in the files."
+        let ids = allIDs.filter { id in item(id).map { !catalog.isApertureOriginal($0.url.path) } ?? false }
+        if ids.isEmpty {
+            alertMessage = "These are in an Aperture library. Alter never writes into those originals, so there's nothing to revert in the files."
             return
         }
         if isSaving || isWorking {
@@ -1950,10 +2056,13 @@ final class LibraryStore: ObservableObject {
         await save(items: targets)
     }
 
-    private func save(items targets: [PhotoItem]) async {
-        guard let catalog, !targets.isEmpty else { return }
-        if originalsAreReadOnly {
-            statusMessage = "This library reads an Aperture library — metadata stays in Alter; the originals are never modified."
+    private func save(items allTargets: [PhotoItem]) async {
+        guard let catalog, !allTargets.isEmpty else { return }
+        // Aperture's originals are never written to; their metadata stays
+        // in Alter. Everything else saves as usual.
+        let targets = allTargets.filter { !catalog.isApertureOriginal($0.url.path) }
+        if targets.isEmpty {
+            statusMessage = "These are in an Aperture library — metadata stays in Alter; the originals are never modified."
             return
         }
         // If a save (or generation) is mid-flight, try again shortly.
@@ -2148,9 +2257,10 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - GPS
 
-    func setGPS(latitude: Double, longitude: Double, for ids: [Int64]) async {
-        if originalsAreReadOnly {
-            alertMessage = "This library reads an Aperture library — Alter never writes into those originals."
+    func setGPS(latitude: Double, longitude: Double, for allIDs: [Int64]) async {
+        let ids = allIDs.filter { id in item(id).map { !isApertureOriginal($0) } ?? false }
+        if ids.isEmpty {
+            alertMessage = "These are in an Aperture library — Alter never writes into those originals."
             return
         }
         isWorking = true
@@ -2319,7 +2429,7 @@ final class LibraryStore: ObservableObject {
                 }
                 if metaChanged {
                     item.metadata = meta
-                    item.dirty = !originalsAreReadOnly
+                    item.dirty = !(catalog.isApertureOriginal(item.url.path))
                     try? catalog.updateMetadata(photoID: id, meta)
                 }
             }

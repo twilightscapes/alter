@@ -51,10 +51,13 @@ enum ApertureImporter {
 
     enum ImportError: LocalizedError {
         case catalogExists(URL)
+        case alreadyImported(String)
         var errorDescription: String? {
             switch self {
             case .catalogExists(let url):
                 return "There's already an Alter library at \(url.lastPathComponent)."
+            case .alreadyImported(let name):
+                return "\(name) is already in this library."
             }
         }
     }
@@ -66,10 +69,22 @@ enum ApertureImporter {
 
     /// Reads the bundle and writes the catalog. Call off the main thread;
     /// `progress` is called on the caller's thread.
-    static func run(bundle: URL, catalogURL: URL, matchRenders: Bool = true,
+    ///
+    /// `merge`: import into an existing catalog (File ▸ Import ▸ Aperture
+    /// Library) instead of building a new one. The library arrives as one
+    /// top-level folder named after it, its own folders, projects and
+    /// albums inside; the first time, the catalog's own Aperture library is
+    /// gathered into a folder of its name the same way.
+    static func run(bundle: URL, catalogURL: URL, matchRenders: Bool = true, merge: Bool = false,
                     progress: @escaping (Progress) -> Void) throws -> Summary {
         let fm = FileManager.default
-        if Catalog.isLibrary(catalogURL) { throw ImportError.catalogExists(catalogURL) }
+        if !merge, Catalog.isLibrary(catalogURL) { throw ImportError.catalogExists(catalogURL) }
+        let bundlePath = bundle.standardizedFileURL.path
+        let libraryName = bundle.deletingPathExtension().lastPathComponent
+        if merge, let existing = try? Catalog(libraryURL: catalogURL),
+           existing.aperturePaths.contains(bundlePath) {
+            throw ImportError.alreadyImported(libraryName)
+        }
 
         progress(Progress(phase: "Reading the Aperture library…", done: 0, total: 1))
         let ap = try ApertureLibrary(bundleURL: bundle)
@@ -99,9 +114,24 @@ enum ApertureImporter {
         var masterIDByProject: [String: [Int64]] = [:]
 
         try catalog.performBatch {
-            try catalog.setMetaValue("source", "aperture")
-            try catalog.setMetaValue("aperture_path", bundle.standardizedFileURL.path)
-            try catalog.setMetaValue("aperture_format", ap.formatDescription)
+            // Where this library's projects and albums go: the top of the
+            // catalog when it's the catalog's own library, a folder named
+            // after it when it's imported into one.
+            var root: Int64?
+            if merge {
+                let known = catalog.aperturePaths
+                if catalog.metaValue("source") == "aperture", known.count == 1, let first = known.first {
+                    try catalog.groupTopLevel(
+                        intoFolderNamed: URL(fileURLWithPath: first).deletingPathExtension().lastPathComponent)
+                }
+                root = try catalog.createProject(name: libraryName, kind: .folder, parent: nil)
+                try catalog.setAperturePaths(known + [bundlePath])
+            } else {
+                try catalog.setMetaValue("source", "aperture")
+                try catalog.setMetaValue("aperture_path", bundlePath)
+                try catalog.setMetaValue("aperture_format", ap.formatDescription)
+                try catalog.setAperturePaths([bundlePath])
+            }
 
             let folderID = try catalog.addFolder(path: bundle.appendingPathComponent("Masters").path)
 
@@ -199,7 +229,7 @@ enum ApertureImporter {
             // Projects → projects, under their folders.
             var folderIDs: [String: Int64] = [:]
             func folder(for path: [String]) throws -> Int64? {
-                var parent: Int64?
+                var parent: Int64? = root
                 var key = ""
                 for name in path {
                     key += "/" + name
@@ -243,20 +273,24 @@ enum ApertureImporter {
             for album in albums {
                 if album.subclass == 2 {
                     if let rules = smartRules(from: album.smartQuery) {
-                        _ = try catalog.createSmartAlbum(name: album.name, rules: rules)
+                        // Smart albums search the whole catalog; an imported
+                        // library's say whose they were.
+                        _ = try catalog.createSmartAlbum(name: merge ? "\(album.name) (\(libraryName))" : album.name,
+                                                         rules: rules)
                         summary.smartAlbums += 1
                         continue
                     }
                     // Rules we can't express: keep its current members.
                     let ids = unique(album.versionIds.compactMap { masterIDByVersionModelId[$0] })
                     guard !ids.isEmpty else { continue }
-                    let albumID = try catalog.createAlbum(name: album.name + " (from Aperture smart album)")
+                    let albumID = try catalog.createAlbum(name: album.name + " (from Aperture smart album)",
+                                                          parent: root)
                     try catalog.addToAlbum(albumID: albumID, photoIDs: ids)
                     summary.smartAlbumsAsPlain += 1
                 } else {
                     let ids = unique(album.versionIds.compactMap { masterIDByVersionModelId[$0] })
                     guard !ids.isEmpty else { continue }
-                    let container = album.folderUuid.flatMap { projectIDByUuid[$0] }
+                    let container = album.folderUuid.flatMap { projectIDByUuid[$0] } ?? root
                     let albumID = try catalog.createAlbum(name: album.name, parent: container)
                     try catalog.addToAlbum(albumID: albumID, photoIDs: ids)
                     summary.albums += 1

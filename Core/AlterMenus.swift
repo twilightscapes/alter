@@ -67,6 +67,18 @@ private struct FileMenu: Commands {
             }
             Button("Open Library…") { store.presentOpenLibraryPanel() }
                 .keyboardShortcut("o", modifiers: .command)
+            // Aperture's Switch to Library: the libraries opened lately.
+            Menu("Switch to Library") {
+                let current = store.catalog?.libraryURL.standardizedFileURL
+                ForEach(store.recentLibraries, id: \.self) { url in
+                    Button(url.deletingPathExtension().lastPathComponent) { store.adoptLibrary(url) }
+                        .disabled(url.standardizedFileURL == current)
+                }
+                if !store.recentLibraries.isEmpty { Divider() }
+                Button("Other…") { store.presentOpenLibraryPanel() }
+                Button("Clear Menu") { store.clearRecentLibraries() }
+                    .disabled(store.recentLibraries.count <= 1)
+            }
             Button("Open Aperture Library…") { store.presentOpenApertureLibraryPanel() }
                 .keyboardShortcut("o", modifiers: [.command, .option])
             Divider()
@@ -75,6 +87,9 @@ private struct FileMenu: Commands {
                     .keyboardShortcut("i", modifiers: .command)
                 Button("Photos Library…") { store.importFromPhotos() }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
+                // Aperture's Import ▸ Library: another Aperture library into
+                // this one, as its own folder.
+                Button("Aperture Library…") { store.presentImportApertureLibraryPanel() }
                 if let items = slot(.fileImport, store) {
                     Divider()
                     items

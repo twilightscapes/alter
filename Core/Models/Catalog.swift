@@ -23,7 +23,17 @@ import Foundation
 struct FolderRow: Identifiable, Hashable {
     let id: Int64
     let path: String
-    var name: String { URL(fileURLWithPath: path).lastPathComponent }
+    /// The folder's name — except an Aperture library's Masters folder,
+    /// which goes by the library's name (two libraries would otherwise
+    /// both read "Masters").
+    var name: String {
+        let url = URL(fileURLWithPath: path)
+        let parent = url.deletingLastPathComponent()
+        if url.lastPathComponent == "Masters", parent.pathExtension == "aplibrary" {
+            return parent.deletingPathExtension().lastPathComponent
+        }
+        return url.lastPathComponent
+    }
 }
 
 struct AlbumRow: Identifiable, Hashable {
@@ -561,7 +571,8 @@ final class Catalog {
         // the row the file-writer walks, so a version never double-writes.
         let master = try db.scalarInt(
             "SELECT COALESCE(version_of, id) FROM photos WHERE id = ?", [photoID])
-        let dirty = dirty && !originalsAreReadOnly
+        let masterPath = (try? db.query("SELECT path FROM photos WHERE id = ?", [master]))?.first?["path"] as? String ?? ""
+        let dirty = dirty && !isApertureOriginal(masterPath)
         try db.run("""
             UPDATE photos SET alt_text = ?, title = ?, caption = ?, keywords = ?,
                 creator = ?, copyright = ?,
@@ -600,6 +611,57 @@ final class Catalog {
     /// originals: metadata lives in this catalog only, so nothing is ever
     /// marked dirty for a file write.
     private(set) lazy var originalsAreReadOnly: Bool = metaValue("source") == "aperture"
+
+    /// Every Aperture library this catalog reads (bundle paths): the one it
+    /// was built from, plus any imported into it since.
+    var aperturePaths: [String] {
+        if let json = metaValue("aperture_paths"), let data = json.data(using: .utf8),
+           let paths = try? JSONDecoder().decode([String].self, from: data) {
+            return paths
+        }
+        return metaValue("aperture_path").map { [$0] } ?? []
+    }
+
+    func setAperturePaths(_ paths: [String]) throws {
+        let data = try JSONEncoder().encode(paths)
+        try setMetaValue("aperture_paths", String(decoding: data, as: UTF8.self))
+        aperturePrefixes = nil
+    }
+
+    /// Each library's path as written and with symlinks resolved (a photo's
+    /// path may carry either form — /tmp vs /private/tmp), cached.
+    private var aperturePrefixesCache: [String]?
+    private var aperturePrefixes: [String]? {
+        get { aperturePrefixesCache }
+        set { aperturePrefixesCache = newValue }
+    }
+
+    /// Is this original inside an Aperture library? Those are never written
+    /// to — in a catalog built from Aperture, or one an Aperture library was
+    /// imported into.
+    func isApertureOriginal(_ path: String) -> Bool {
+        if originalsAreReadOnly { return true }
+        if aperturePrefixesCache == nil {
+            aperturePrefixesCache = aperturePaths.flatMap { p -> [String] in
+                let resolved = URL(fileURLWithPath: p).resolvingSymlinksInPath().path
+                let privateForm = p.hasPrefix("/tmp/") || p.hasPrefix("/var/") ? "/private" + p : p
+                return Array(Set([p, resolved, privateForm])).map { $0 + "/" }
+            }
+        }
+        return aperturePrefixesCache!.contains { path.hasPrefix($0) }
+    }
+
+    /// The first time a second Aperture library comes in: everything at the
+    /// top of Projects and Albums moves into one folder named after the
+    /// library it came from, so each library reads as its own collapsible
+    /// group. Smart albums stay where they are (they search everything).
+    @discardableResult
+    func groupTopLevel(intoFolderNamed name: String) throws -> Int64 {
+        let folder = try createProject(name: name, kind: .folder, parent: nil)
+        try db.run("UPDATE projects SET parent_id = ? WHERE parent_id IS NULL AND id != ?", [folder, folder])
+        try db.run("UPDATE albums SET parent_id = ? WHERE parent_id IS NULL", [folder])
+        return folder
+    }
 
     /// Many writes, one transaction (imports).
     func performBatch(_ body: () throws -> Void) throws {
