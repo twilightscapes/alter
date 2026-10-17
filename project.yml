@@ -36,6 +36,8 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
+        # Cameras over USB (Import window, tethered shooting).
+        NSCameraUsageDescription: "Alter reads photos from connected cameras and, for tethered shooting, fires the shutter and brings each shot into your library."
         CFBundleDocumentTypes:
           # The .alterlib library is a Finder package: one document icon,
           # double-click opens Alter. Aperture libraries open read-only,

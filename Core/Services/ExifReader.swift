@@ -22,6 +22,9 @@ struct PhotoExifInfo {
     var iso: String?
     var focalLength: String?
     var captureDate: String?
+    /// The same, as a timestamp (local time when the camera recorded no
+    /// offset), for the catalog.
+    var captureTimestamp: Double?
     var pixelSize: String?
     var coordinate: CLLocationCoordinate2D?
     // Raw values, for the catalog's EXIF columns (smart albums search these).
@@ -98,6 +101,7 @@ enum ExifReader {
         }
         if let raw = exif?[kCGImagePropertyExifDateTimeOriginal] as? String {
             info.captureDate = formatCaptureDate(raw)
+            info.captureTimestamp = parseCaptureDate(raw, offset: exif?[kCGImagePropertyExifOffsetTimeOriginal] as? String)
         }
 
         if let latitude = gps?[kCGImagePropertyGPSLatitude] as? Double,
@@ -109,6 +113,17 @@ enum ExifReader {
                 longitude: lonRef == "W" ? -longitude : longitude)
         }
         return info
+    }
+
+    private static func parseCaptureDate(_ raw: String, offset: String?) -> Double? {
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        if let offset, offset.count >= 6 {
+            parser.dateFormat = "yyyy:MM:dd HH:mm:ssXXX"
+            if let date = parser.date(from: raw + offset) { return date.timeIntervalSince1970 }
+        }
+        parser.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return parser.date(from: raw)?.timeIntervalSince1970
     }
 
     private static func formatCaptureDate(_ raw: String) -> String {

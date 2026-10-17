@@ -94,7 +94,11 @@ struct ExifSection: View {
             exifRow("Lens", info.lens)
             exifRow("Exposure", [info.exposure, info.aperture, info.iso, info.focalLength]
                 .compactMap { $0 }.joined(separator: " · ").nilIfEmpty)
-            exifRow("Captured", info.captureDate)
+            // The catalog's date wins: it's the file's EXIF date, or
+            // Aperture's, or what Adjust Date & Time set.
+            exifRow("Captured", item.captureDate.map {
+                Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .shortened)
+            } ?? info.captureDate)
             exifRow("Size", info.pixelSize)
         }
         .font(.caption)

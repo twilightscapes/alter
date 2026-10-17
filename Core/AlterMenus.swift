@@ -83,7 +83,7 @@ private struct FileMenu: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .option])
             Divider()
             Menu("Import") {
-                Button("Files…") { store.presentImportPanel() }
+                Button("Files…") { store.isImportWindowPresented = true }
                     .keyboardShortcut("i", modifiers: .command)
                 Button("Photos Library…") { store.importFromPhotos() }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
@@ -110,6 +110,16 @@ private struct FileMenu: Commands {
                 Menu("Share") { items }
                     .disabled(!store.isOpen)
             }
+            // Aperture's File ▸ Tether.
+            Menu("Tether") {
+                Button("Start Session…") { store.isImportWindowPresented = true }
+                    .disabled(CameraHub.shared.tether != nil)
+                Button("Capture") { CameraHub.shared.tether?.capture() }
+                    .disabled(CameraHub.shared.tether?.camera.canTakePicture != true)
+                Button("Stop Session") { CameraHub.shared.stopTether() }
+                    .disabled(CameraHub.shared.tether == nil)
+            }
+            .disabled(!store.isOpen)
             Divider()
             Button("Play Slideshow") {
                 store.startSlideshow(window: NSApp.keyWindow ?? NSApp.mainWindow)
@@ -359,6 +369,8 @@ private struct MetadataMenu: Commands {
             Divider()
             Button("Batch Change…") { store.isBatchChangePresented = true }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(targets.isEmpty)
+            Button("Adjust Date & Time…") { store.isAdjustDatePresented = true }
                 .disabled(targets.isEmpty)
             // Aperture's Lift & Stamp: ⇧⌘C lifts, ⇧⌘V stamps by the HUD's
             // checkboxes (adjustments and keywords by default).
