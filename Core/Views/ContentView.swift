@@ -353,8 +353,9 @@ struct ContentView: View {
                 Text(progress.phase)
                     .foregroundColor(.secondary)
             }
-            if store.originalsAreReadOnly {
-                Label("Aperture library — originals untouched", systemImage: "lock")
+            if store.hasApertureLibraries {
+                Label(store.originalsAreReadOnly ? "Aperture library — originals untouched"
+                                                 : "Aperture originals untouched", systemImage: "lock")
                     .labelStyle(.titleAndIcon)
                     .foregroundColor(.secondary)
                     .help("This library reads an Aperture library in place. Metadata and adjustments live in Alter's catalog; the Aperture bundle is never modified.")
