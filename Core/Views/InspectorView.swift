@@ -117,6 +117,35 @@ private struct InfoPanel: View {
     /// and the choice sticks.
     @AppStorage("alter_show_alt_field") private var showAltField = false
 
+    private var ratingAndFlag: some View {
+        HStack(spacing: 10) {
+            RatingControl(rating: item.rating) { store.setRating($0, for: [id]) }
+            Button {
+                store.setFlagged(!item.flagged, for: [id])
+            } label: {
+                Image(systemName: item.flagged ? "flag.fill" : "flag")
+                    .foregroundColor(item.flagged ? .orange : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(item.flagged ? "Unflag" : "Flag")
+            .accessibilityLabel(item.flagged ? "Unflag photo" : "Flag photo")
+        }
+    }
+
+    private var snippetsMenu: some View {
+        Menu {
+            SnippetMenuItems(targets: [id])
+        } label: {
+            Label("Snippets", systemImage: "text.badge.plus")
+                .labelStyle(.iconOnly)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .frame(width: 28)
+        .help("Apply a saved snippet to this photo")
+        .accessibilityLabel("Snippets")
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -125,30 +154,26 @@ private struct InfoPanel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                HStack(spacing: 10) {
-                    RatingControl(rating: item.rating) { store.setRating($0, for: [id]) }
-                    Button {
-                        store.setFlagged(!item.flagged, for: [id])
-                    } label: {
-                        Image(systemName: item.flagged ? "flag.fill" : "flag")
-                            .foregroundColor(item.flagged ? .orange : .secondary)
+                // Rating, flag, label and snippets on one line when the
+                // inspector is wide enough; at its narrowest the label dots
+                // drop to a line of their own. (One fixed row was ~300 pt:
+                // at the 280 pt minimum it stretched the whole panel past
+                // the window's edge.)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        ratingAndFlag
+                        LabelDots(selected: item.label) { store.setLabel($0, for: [id]) }
+                        Spacer(minLength: 0)
+                        snippetsMenu
                     }
-                    .buttonStyle(.plain)
-                    .help(item.flagged ? "Unflag" : "Flag")
-                    .accessibilityLabel(item.flagged ? "Unflag photo" : "Flag photo")
-                    LabelDots(selected: item.label) { store.setLabel($0, for: [id]) }
-                    Spacer()
-                    Menu {
-                        SnippetMenuItems(targets: [id])
-                    } label: {
-                        Label("Snippets", systemImage: "text.badge.plus")
-                            .labelStyle(.iconOnly)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            ratingAndFlag
+                            Spacer(minLength: 0)
+                            snippetsMenu
+                        }
+                        LabelDots(selected: item.label) { store.setLabel($0, for: [id]) }
                     }
-                    .menuStyle(.button)
-                .buttonStyle(.borderless)
-                    .frame(width: 28)
-                    .help("Apply a saved snippet to this photo")
-                    .accessibilityLabel("Snippets")
                 }
 
                 if case .error(let message) = item.status {
