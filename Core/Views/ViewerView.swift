@@ -223,6 +223,8 @@ struct ViewerView: View {
                 extensionToolID = nil
             }
         }
+        .onChange(of: store.viewerToolRequest) { _ in handleToolRequest() }
+        .onAppear { handleToolRequest() }
         .onChange(of: retouchMode) { on in
             retouch.reset()
             if on { loupeMode = false; compareMode = false }
@@ -1852,6 +1854,33 @@ struct ViewerView: View {
     private func toolContext(_ item: PhotoItem, fit: CGRect) -> ViewerToolContext {
         ViewerToolContext(item: item, store: store, fit: fit, undo: undoManager) {
             extensionToolID = nil
+        }
+    }
+
+    /// A tool asked for from the menus (Photos ▸ Crop, View ▸ Show Loupe…):
+    /// picked up as its key would.
+    private func handleToolRequest() {
+        guard let request = store.viewerToolRequest else { return }
+        store.viewerToolRequest = nil
+        guard item?.isVideo != true else { return }
+        func only() {
+            cropMode = false; straightenMode = false; retouchMode = false; redEyeMode = false
+            loupeMode = false; compareMode = false; extensionToolID = nil
+            if brushMode { exitBrushMode() }
+        }
+        switch request {
+        case "crop": only(); cropMode = true
+        case "straighten": only(); straightenMode = true
+        case "retouch": only(); retouchMode = true
+        case "redEye": only(); redEyeMode = true
+        case "brush": only(); enterBrushMode()
+        case "loupe": loupeMode.toggle(); if !loupeMode { loupeHover = nil }
+        case "master": showMaster.toggle()
+        case "compare": if compareMode { compareMode = false } else { enterCompareMode() }
+        default:
+            if AlterExtensions.shared.viewerModeTools.contains(where: { $0.id == request }) {
+                openExtensionTool(request)
+            }
         }
     }
 

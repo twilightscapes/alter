@@ -67,14 +67,27 @@ final class AlterExtensions {
 
     // MARK: Menus
 
-    /// File menu, after the import items.
-    var fileMenuItems: ((LibraryStore) -> AnyView)?
-    /// File menu, after Export.
-    var exportMenuItems: ((LibraryStore) -> AnyView)?
-    /// File menu, a group of its own after Save.
-    var createMenuItems: ((LibraryStore) -> AnyView)?
-    /// Top of the Media menu.
-    var mediaMenuTopItems: ((LibraryStore) -> AnyView)?
+    /// Where an extension's commands go in the menu bar, which follows
+    /// Aperture's: File, Edit, Photos, Stacks, Metadata, View, Window.
+    enum MenuSlot: Hashable {
+        /// File ▸ New, after the library's own items.
+        case fileNew
+        /// File ▸ Import, after Files and Photos Library.
+        case fileImport
+        /// File ▸ Export, after Versions.
+        case fileExport
+        /// File ▸ Share — the submenu exists only when this is filled.
+        case fileShare
+        /// The end of Photos.
+        case photos
+        /// The end of Metadata.
+        case metadata
+        /// Window, after the HUDs.
+        case window
+    }
+
+    /// An extension's commands, by where they belong.
+    var menuItems: [MenuSlot: (LibraryStore) -> AnyView] = [:]
     /// Undo / Redo: return true when the extension handled it.
     var undo: ((LibraryStore) -> Bool)?
     var redo: ((LibraryStore) -> Bool)?
