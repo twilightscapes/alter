@@ -49,6 +49,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Alter reads photos from connected cameras and, for tethered shooting, fires the shutter and brings each shot into your library.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
