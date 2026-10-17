@@ -67,6 +67,14 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if FileAccess.isSandboxed {
+                GroupBox("Folder Access") {
+                    FolderAccessPane(access: FileAccess.shared)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
             GroupBox("Watermark") {
                 WatermarkSettingsPane()
                     .padding(6)
@@ -115,6 +123,46 @@ struct FacesSettingsPane: View {
             Button("Delete", role: .destructive) { faces.deleteAllData() }
         } message: {
             Text("Every face found and every name given in this library is forgotten, and the face recognition model is removed. Photos aren't touched.")
+        }
+    }
+}
+
+// MARK: - Folder access
+
+/// What Alter may open (the App Store build only reads what it's given).
+struct FolderAccessPane: View {
+    @EnvironmentObject var store: LibraryStore
+    @ObservedObject var access: FileAccess
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let paths = access.grants.keys.sorted()
+            if paths.isEmpty {
+                Text("Nothing yet — libraries and folders you open are added here.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            ForEach(paths, id: \.self) { path in
+                HStack {
+                    Image(systemName: "folder")
+                        .foregroundColor(.secondary)
+                    Text(FileAccess.displayPath(path))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path)
+                    Spacer()
+                    Button("Remove") { access.forget(path) }
+                        .controlSize(.small)
+                }
+            }
+            HStack {
+                Button("Add Folder…") { store.presentAllowAccessPanel() }
+                    .controlSize(.small)
+                Spacer()
+            }
+            Text("Alter can only open what you give it. Adding your Pictures folder, or a whole drive, covers every photo in it.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 }
@@ -233,6 +281,7 @@ struct WatermarkSettingsPane: View {
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
+            FileAccess.shared.remember(url)
             settings.imagePath = url.path
             Watermark.save(settings)
         }
