@@ -854,6 +854,16 @@ final class LibraryStore: ObservableObject {
         case browser, split, viewer
     }
 
+    /// A menu asking the sidebar to start a new project, folder, album or
+    /// smart album (the sidebar owns the naming prompts).
+    enum NewItemRequest: Equatable { case project, folder, album, smartAlbum }
+    @Published var newItemRequest: NewItemRequest?
+
+    /// A menu asking the viewer to pick up one of its tools ("crop",
+    /// "straighten", "retouch", "redEye", "brush", "loupe", "master",
+    /// "compare", or an extension tool's id). The viewer clears it.
+    @Published var viewerToolRequest: String?
+
     @Published var viewMode: ViewMode = .browser {
         didSet {
             guard viewMode != oldValue else { return }
@@ -1293,12 +1303,12 @@ final class LibraryStore: ObservableObject {
     }
 
     /// W: Info → Adjust → (Animate) → Info.
+    /// W, as in Aperture: Info → Adjust → each extension tab (Animate) →
+    /// back to Info.
     func cycleInspectorTab() {
-        switch inspectorTab {
-        case .info: inspectorTab = .adjust
-        case .adjust: inspectorTab = .info
-        case .ext: inspectorTab = .info
-        }
+        let tabs: [InspectorTab] = [.info, .adjust] + AlterExtensions.shared.inspectorTabs.map { .ext($0.id) }
+        let index = tabs.firstIndex(of: inspectorTab) ?? -1
+        inspectorTab = tabs[(index + 1) % tabs.count]
     }
 
     func setFlagged(_ flagged: Bool, for ids: [Int64]) {

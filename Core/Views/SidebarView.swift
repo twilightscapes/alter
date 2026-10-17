@@ -168,6 +168,21 @@ struct SidebarView: View {
                     .environmentObject(store)
             }
         )
+        // File ▸ New ▸ Project / Folder / Album / Smart Album land here.
+        .onChange(of: store.newItemRequest) { request in
+            guard let request else { return }
+            store.newItemRequest = nil
+            switch request {
+            case .project, .folder:
+                newProjectKind = request == .folder ? .folder : .project
+                newProjectParent = nil
+                isNamingProject = true
+            case .album:
+                isNamingAlbum = true
+            case .smartAlbum:
+                smartAlbumSheet = SmartAlbumSheet(album: nil)
+            }
+        }
         .alert(newProjectKind == .folder ? "New Folder" : "New Project", isPresented: $isNamingProject) {
             TextField(newProjectKind == .folder ? "Folder name" : "Project name", text: $newProjectName)
             Button("Create") {

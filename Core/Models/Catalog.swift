@@ -712,6 +712,11 @@ final class Catalog {
         try db.run("DELETE FROM stacks WHERE id = ?", [stackID])
     }
 
+    /// Take one photo (and its versions) out of whatever stack it's in.
+    func removeFromStack(photoID: Int64) throws {
+        try db.run("UPDATE photos SET stack_id = NULL WHERE id = ? OR version_of = ?", [photoID, photoID])
+    }
+
     func setStackPick(stackID: Int64, photoID: Int64) throws {
         try db.run("UPDATE stacks SET pick_photo_id = ? WHERE id = ?", [photoID, stackID])
     }
