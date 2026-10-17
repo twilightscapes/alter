@@ -140,6 +140,10 @@ private struct FileMenu: Commands {
             .keyboardShortcut("s", modifiers: [.option, .shift])
             .disabled(!store.isOpen || store.items.isEmpty)
             Divider()
+            if FileAccess.isSandboxed {
+                Button("Allow Access to Folder…") { store.presentAllowAccessPanel() }
+                    .disabled(!store.isOpen)
+            }
             Button("Show in Finder") { store.showInFinder(store.commandTargets) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(store.commandTargets.isEmpty)

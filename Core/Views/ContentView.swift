@@ -148,6 +148,8 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: savedSidebarWidth, max: 340)
         } detail: {
             HStack(spacing: 0) {
+              VStack(spacing: 0) {
+                FileAccessBanner()
                 Group {
                     if let pane = AlterExtensions.shared.centerPane?(store) {
                         // An extension's editor or queue owns the centre pane.
@@ -201,6 +203,7 @@ struct ContentView: View {
                         .padding(.bottom, store.viewMode == .browser ? 16 : 80)
                         .animation(.easeOut(duration: 0.2), value: CameraHub.shared.tether != nil)
                 }
+              }
                 if store.isInspectorShown {
                     inspectorDivider
                     InspectorView()

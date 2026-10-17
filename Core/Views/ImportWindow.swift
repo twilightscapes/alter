@@ -91,6 +91,8 @@ struct ImportWindow: View {
     @State private var candidates: [Candidate] = []
     @State private var chosen: Set<String> = []
     @State private var scanning = false
+    /// A card or drive the sandbox hasn't been given yet (App Store build).
+    @State private var lockedVolume: VolumeWatcher.Volume?
 
     @AppStorage("import.copy") private var copyFiles = true
     @AppStorage("import.copyFolder") private var copyFolderPath = ""
@@ -117,8 +119,7 @@ struct ImportWindow: View {
     private var willCopy: Bool { mustCopy || copyFiles }
     private var copyFolder: URL {
         copyFolderPath.isEmpty
-            ? (FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("Alter Imports"))
+            ? FileAccess.realHome.appendingPathComponent("Pictures/Alter Imports", isDirectory: true)
             : URL(fileURLWithPath: copyFolderPath)
     }
     private var importCount: Int {
@@ -257,6 +258,13 @@ struct ImportWindow: View {
             loadCamera(camera)
             return
         }
+        lockedVolume = nil
+        if case .volume(let volume) = new, Self.needsAccess(volume.url) {
+            // Ask first; scanning a volume Alter can't read finds nothing.
+            lockedVolume = volume
+            scanning = false
+            return
+        }
         scanning = true
         let roots: [URL]
         switch new {
@@ -297,6 +305,13 @@ struct ImportWindow: View {
         scanning = !camera.isReady
     }
 
+    /// Sandboxed and not yet granted (a listing would just come back empty).
+    private static func needsAccess(_ volume: URL) -> Bool {
+        guard FileAccess.isSandboxed else { return false }
+        return !FileAccess.shared.isCovered(volume.standardizedFileURL.path)
+            || !FileAccess.canRead(volume.path)
+    }
+
     private func pickFiles() {
         let panel = NSOpenPanel()
         panel.title = "Import"
@@ -305,6 +320,7 @@ struct ImportWindow: View {
         panel.allowsMultipleSelection = true
         panel.message = "Choose folders, photos or videos"
         if panel.runModal() == .OK, !panel.urls.isEmpty {
+            FileAccess.shared.remember(panel.urls)
             select(.picked(panel.urls))
         }
     }
@@ -324,7 +340,25 @@ struct ImportWindow: View {
             }
             .padding(10)
             Divider()
-            if candidates.isEmpty && !scanning {
+            if let volume = lockedVolume {
+                VStack(spacing: 10) {
+                    Image(systemName: volume.isCard ? "sdcard" : "externaldrive")
+                        .font(.system(size: 30))
+                        .foregroundColor(.secondary)
+                    Text("Alter needs your permission to read “\(volume.name)”.")
+                    Button("Allow Access…") {
+                        Task {
+                            if await FileAccess.shared.ask(
+                                for: volume.url,
+                                reason: "Click Allow Access to let Alter read “\(volume.name)”. You'll only be asked once for it.") {
+                                select(.volume(volume))
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if candidates.isEmpty && !scanning {
                 Text(source == nil ? "Choose a card, drive or folder on the left." : "No photos or videos found there.")
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -368,7 +402,7 @@ struct ImportWindow: View {
                           : "Off: the files stay where they are and Alter references them")
                 if willCopy {
                     HStack {
-                        Text(copyFolder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        Text(FileAccess.displayPath(copyFolder.path))
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundColor(.secondary)
@@ -426,7 +460,10 @@ struct ImportWindow: View {
         panel.canCreateDirectories = true
         panel.prompt = "Copy Here"
         panel.directoryURL = copyFolder.deletingLastPathComponent()
-        if panel.runModal() == .OK, let url = panel.url { copyFolderPath = url.path }
+        if panel.runModal() == .OK, let url = panel.url {
+            FileAccess.shared.remember(url)
+            copyFolderPath = url.path
+        }
     }
 
     // MARK: Go

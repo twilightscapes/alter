@@ -134,7 +134,7 @@ struct FilmstripCell: View {
         )
         .contextMenu { PhotoContextMenu(item: item) }
         .help(item.filename)
-        .task(id: item.url.path + "#" + item.edits.cacheKey) {
+        .task(id: item.url.path + "#" + item.edits.cacheKey + "#\(store.accessGeneration)") {
             let url = item.url
             let edits = item.edits
             if thumbnail == nil {

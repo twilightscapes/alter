@@ -270,6 +270,7 @@ struct ExportSheet: View {
             panel.begin { response in
                 guard response == .OK, var url = panel.url else { return }
                 if url.pathExtension != "zip" { url.appendPathExtension("zip") }
+                FileAccess.shared.remember(url.deletingLastPathComponent())
                 run(options: ExportOptions(
                     format: format, quality: quality, sizing: sizing,
                     namingPattern: pattern, includeMetadata: includeMetadata,
@@ -286,6 +287,7 @@ struct ExportSheet: View {
             panel.prompt = "Export Here"
             panel.begin { response in
                 guard response == .OK, let url = panel.url else { return }
+                FileAccess.shared.remember(url)
                 run(options: ExportOptions(
                     format: format, quality: quality, sizing: sizing,
                     namingPattern: pattern, includeMetadata: includeMetadata,

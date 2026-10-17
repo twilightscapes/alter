@@ -623,7 +623,7 @@ struct PhotoCell: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isImage, .isSelected] : .isImage)
-        .task(id: item.url.path + "#" + item.edits.cacheKey) {
+        .task(id: item.url.path + "#" + item.edits.cacheKey + "#\(store.accessGeneration)") {
             let url = item.url
             let edits = item.edits
             if thumbnail == nil {

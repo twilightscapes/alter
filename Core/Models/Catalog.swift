@@ -602,6 +602,11 @@ final class Catalog {
             "SELECT id FROM photos WHERE path = ? AND version_of IS NULL", [url.path])
     }
 
+    /// Every master's file path (for checking what can be read).
+    func masterPaths() throws -> [String] {
+        try db.query("SELECT path FROM photos WHERE version_of IS NULL").compactMap { $0["path"] as? String }
+    }
+
     func photos(in source: LibrarySource) throws -> [PhotoItem] {
         // Masters only — versions ride along with their master (the store
         // splices them in when a master is expanded).

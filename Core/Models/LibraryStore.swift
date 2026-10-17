@@ -103,6 +103,9 @@ final class LibraryStore: ObservableObject {
     private static let autosaveKey = "alter_autosave_to_files"
 
     init() {
+        // Reopen everything the person has given Alter access to (the App
+        // Store build is sandboxed) before any library is opened.
+        _ = FileAccess.shared
         // Default ON — fields should just save.
         if UserDefaults.standard.object(forKey: Self.autosaveKey) == nil {
             autosaveToFiles = true
@@ -233,6 +236,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func open(libraryURL: URL) {
+        FileAccess.shared.remember(libraryURL)
         // Already open (launch can ask twice: last library, then the Finder
         // URL) — don't tear the catalog down and rebuild it.
         if let catalog, catalog.libraryURL.standardizedFileURL == libraryURL.standardizedFileURL { return }
@@ -253,6 +257,8 @@ final class LibraryStore: ObservableObject {
             }
             backfillExifIfNeeded()
             backfillLocationsIfNeeded()
+            accessPromptDismissed = false
+            checkFileAccess()
         } catch {
             statusMessage = error.localizedDescription
             catalog = nil
@@ -322,6 +328,7 @@ final class LibraryStore: ObservableObject {
     /// they sit. If that catalog already exists, just open it; otherwise
     /// build it, then open it. The bundle itself is read-only throughout.
     func adoptApertureLibrary(_ bundle: URL, catalogURL: URL? = nil) {
+        FileAccess.shared.remember(bundle)
         let target = catalogURL ?? ApertureImporter.defaultCatalogURL(for: bundle)
         if Catalog.isLibrary(target) {
             // A catalog that never finished building (a crash mid-read)
@@ -333,6 +340,12 @@ final class LibraryStore: ObservableObject {
                 return
             }
             try? FileManager.default.removeItem(at: target)
+        }
+        // Sandboxed, Alter may read the Aperture library but not write beside
+        // it until the person says where the catalog goes.
+        if !FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) {
+            chooseCatalogLocation(for: bundle, suggested: target)
+            return
         }
         if Self.locationSyncsViaICloud(target) {
             let alert = NSAlert()
@@ -347,19 +360,8 @@ final class LibraryStore: ObservableObject {
             alert.addButton(withTitle: "Cancel")
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                let panel = NSSavePanel()
-                panel.title = "Alter Catalog for \(bundle.deletingPathExtension().lastPathComponent)"
-                panel.nameFieldStringValue = target.lastPathComponent
-                panel.canCreateDirectories = true
-                panel.directoryURL = FileManager.default.urls(
-                    for: .picturesDirectory, in: .userDomainMask).first
-                panel.begin { [weak self] response in
-                    guard response == .OK, var url = panel.url else { return }
-                    if url.pathExtension != Catalog.fileExtension {
-                        url.appendPathExtension(Catalog.fileExtension)
-                    }
-                    self?.readApertureLibrary(bundle, into: url)
-                }
+                chooseCatalogLocation(for: bundle, suggested: target,
+                                      in: FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first)
                 return
             case .alertSecondButtonReturn:
                 break
@@ -368,6 +370,25 @@ final class LibraryStore: ObservableObject {
             }
         }
         readApertureLibrary(bundle, into: target)
+    }
+
+    /// Where Alter's catalog for an Aperture library goes, asked with a
+    /// Save panel (which also gives Alter the right to write there).
+    private func chooseCatalogLocation(for bundle: URL, suggested target: URL, in folder: URL? = nil) {
+        let panel = NSSavePanel()
+        panel.title = "Alter Catalog for \(bundle.deletingPathExtension().lastPathComponent)"
+        panel.message = "Alter keeps its own catalog for this Aperture library — the Aperture library itself is never changed."
+        panel.nameFieldStringValue = target.lastPathComponent
+        panel.canCreateDirectories = true
+        panel.directoryURL = folder ?? target.deletingLastPathComponent()
+        panel.begin { [weak self] response in
+            guard response == .OK, var url = panel.url else { return }
+            if url.pathExtension != Catalog.fileExtension {
+                url.appendPathExtension(Catalog.fileExtension)
+            }
+            FileAccess.shared.remember(url.deletingLastPathComponent())
+            self?.readApertureLibrary(bundle, into: url)
+        }
     }
 
     private func readApertureLibrary(_ bundle: URL, into catalogURL: URL) {
@@ -448,6 +469,7 @@ final class LibraryStore: ObservableObject {
     }
 
     private func importApertureLibrary(_ bundle: URL, into catalogURL: URL) {
+        FileAccess.shared.remember(bundle)
         apertureProgress = ApertureImporter.Progress(phase: "Opening…", done: 0, total: 1)
         statusMessage = "Importing \(bundle.lastPathComponent)…"
         // A deep-stacked thread, as for opening one (render matching builds
@@ -1183,6 +1205,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func importURLs(_ urls: [URL]) async -> [Int64] {
         guard let catalog else { return [] }
+        FileAccess.shared.remember(urls)
         let (found, skipped) = Self.collectImageFiles(from: urls)
         guard !found.isEmpty else {
             statusMessage = ""
@@ -1966,6 +1989,7 @@ final class LibraryStore: ObservableObject {
         panel.message = "Where is \"\(folder.name)\" now? (was: \(folder.path))"
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
+            FileAccess.shared.remember(url)
             try? catalog.relocateFolder(id: id, to: url.path)
             self.reloadSidebar()
             self.reloadItems()
@@ -2526,6 +2550,7 @@ final class LibraryStore: ObservableObject {
         panel.message = "Where is \"\(current.filename)\" now? (was: \(current.url.path))"
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
+            FileAccess.shared.remember(url)
             try? catalog.relocatePhoto(id: id, to: url.path)
             self.reloadItems()
             self.statusMessage = "Relinked \(url.lastPathComponent)."
@@ -2538,6 +2563,12 @@ final class LibraryStore: ObservableObject {
     @Published var isAdjustDatePresented = false
     /// File ▸ Print (⌘P).
     @Published var isPrintSheetPresented = false
+    /// Folders holding photos Alter isn't allowed to read (sandboxed: the
+    /// App Store build) — the "Allow Access" banner.
+    @Published var foldersNeedingAccess: [URL] = []
+    @Published var accessPromptDismissed = false
+    /// Bumped when access is granted, so thumbnails that failed try again.
+    @Published var accessGeneration = 0
     /// Aperture's I: the inspector shown or hidden.
     @Published var isInspectorShown = UserDefaults.standard.object(forKey: "alter.inspectorShown") as? Bool ?? true {
         didSet { UserDefaults.standard.set(isInspectorShown, forKey: "alter.inspectorShown") }
