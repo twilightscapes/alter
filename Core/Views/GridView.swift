@@ -619,9 +619,7 @@ struct PhotoCell: View {
                 // iCloud-evicted originals read as grey squares — pull them down.
                 try? await FileLocality.ensureLocal(url)
             }
-            thumbnail = await Task.detached(priority: .utility) {
-                ImageLoader.shared.thumbnail(for: url, edits: edits)
-            }.value
+            thumbnail = await ImageLoader.shared.thumbnailAsync(for: url, edits: edits)
             let exists = FileManager.default.fileExists(atPath: url.path)
             isMissing = thumbnail == nil && !exists
             isUnreadable = thumbnail == nil && exists
