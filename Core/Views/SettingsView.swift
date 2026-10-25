@@ -17,8 +17,26 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject var store: LibraryStore
     @AppStorage("viewer.background") private var viewerBackground = 0.08
+    @State private var contentHeight: CGFloat = 600
 
     var body: some View {
+        // As tall as the settings are, up to what fits on screen; past that
+        // (a long Folder Access list, Pro's panes) it scrolls.
+        ScrollView(.vertical) {
+            content
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: SettingsHeightKey.self, value: proxy.size.height)
+                })
+        }
+        .onPreferenceChange(SettingsHeightKey.self) { contentHeight = $0 }
+        .frame(width: 460, height: min(contentHeight, Self.maxHeight))
+    }
+
+    private static var maxHeight: CGFloat {
+        (NSScreen.main?.visibleFrame.height ?? 900) - 80
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             GroupBox("Viewer") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -90,8 +108,12 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(20)
-        .frame(width: 460)
     }
+}
+
+private struct SettingsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // MARK: - Faces
@@ -142,19 +164,25 @@ struct FolderAccessPane: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            ForEach(paths, id: \.self) { path in
-                HStack {
-                    Image(systemName: "folder")
-                        .foregroundColor(.secondary)
-                    Text(FileAccess.displayPath(path))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(path)
-                    Spacer()
-                    Button("Remove") { access.forget(path) }
-                        .controlSize(.small)
+            // About six rows, then the list scrolls on its own.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(paths, id: \.self) { path in
+                        HStack {
+                            Image(systemName: "folder")
+                                .foregroundColor(.secondary)
+                            Text(FileAccess.displayPath(path))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(path)
+                            Spacer()
+                            Button("Remove") { access.forget(path) }
+                                .controlSize(.small)
+                        }
+                    }
                 }
             }
+            .frame(height: paths.isEmpty ? 0 : min(CGFloat(paths.count), 6) * 28)
             HStack {
                 Button("Add Folder…") { store.presentAllowAccessPanel() }
                     .controlSize(.small)
